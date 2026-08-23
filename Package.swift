@@ -22,7 +22,7 @@ import PackageDescription
 // Sources/CNIOBoringSSL directory. The source repository is at
 // https://boringssl.googlesource.com/boringssl.
 //
-// BoringSSL Commit: 817ab07ebb53da35afea409ab9328f578492832d
+// BoringSSL Commit: 4a3cda40b965bbda7cebf86e35c1ed6890ebcc34
 
 /// This function generates the dependencies we want to express.
 ///

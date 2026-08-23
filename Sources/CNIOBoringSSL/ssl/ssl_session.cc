@@ -1,12 +1,17 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright 2005 Nokia. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -16,10 +21,12 @@
 
 #include <utility>
 
+#include <CNIOBoringSSL_cipher.h>
 #include <CNIOBoringSSL_err.h>
+#include <CNIOBoringSSL_evp.h>
 #include <CNIOBoringSSL_hmac.h>
-#include <CNIOBoringSSL_lhash.h>
 #include <CNIOBoringSSL_mem.h>
+#include <CNIOBoringSSL_pool.h>
 #include <CNIOBoringSSL_rand.h>
 
 #include "../crypto/internal.h"
@@ -33,8 +40,7 @@ BSSL_NAMESPACE_BEGIN
 // that it needs to asynchronously fetch session information.
 static const char g_pending_session_magic = 0;
 
-static CRYPTO_EX_DATA_CLASS g_ex_data_class =
-    CRYPTO_EX_DATA_CLASS_INIT_WITH_APP_DATA;
+static ExDataClass g_ex_data_class(/*with_app_data=*/true);
 
 static void SSL_SESSION_list_remove(SSL_CTX *ctx, SSL_SESSION *session);
 static void SSL_SESSION_list_add(SSL_CTX *ctx, SSL_SESSION *session);
@@ -61,7 +67,8 @@ uint32_t ssl_hash_session_id(Span<const uint8_t> session_id) {
   return hash;
 }
 
-UniquePtr<SSL_SESSION> SSL_SESSION_dup(SSL_SESSION *session, int dup_flags) {
+UniquePtr<SSL_SESSION> SSL_SESSION_dup(const SSL_SESSION *session,
+                                       int dup_flags) {
   UniquePtr<SSL_SESSION> new_session = ssl_session_new(session->x509_method);
   if (!new_session) {
     return nullptr;
@@ -84,6 +91,7 @@ UniquePtr<SSL_SESSION> SSL_SESSION_dup(SSL_SESSION *session, int dup_flags) {
       return nullptr;
     }
   }
+  new_session->peer_cert_type = session->peer_cert_type;
   if (session->certs != nullptr) {
     auto buf_up_ref = [](const CRYPTO_BUFFER *buf) {
       CRYPTO_BUFFER_up_ref(const_cast<CRYPTO_BUFFER *>(buf));
@@ -94,6 +102,9 @@ UniquePtr<SSL_SESSION> SSL_SESSION_dup(SSL_SESSION *session, int dup_flags) {
     if (new_session->certs == nullptr) {
       return nullptr;
     }
+  }
+  if (session->peer_raw_public_key != nullptr) {
+    new_session->peer_raw_public_key = UpRef(session->peer_raw_public_key);
   }
 
   if (!session->x509_method->session_dup(new_session.get(), session)) {
@@ -219,7 +230,7 @@ bool ssl_get_new_session(SSL_HANDSHAKE *hs) {
   }
 
   UniquePtr<SSL_SESSION> session = ssl_session_new(ssl->ctx->x509_method);
-  if (session == NULL) {
+  if (session == nullptr) {
     return false;
   }
 
@@ -254,7 +265,7 @@ bool ssl_get_new_session(SSL_HANDSHAKE *hs) {
   session->verify_result = X509_V_ERR_INVALID_CALL;
 
   hs->new_session = std::move(session);
-  ssl_set_session(ssl, NULL);
+  ssl_set_session(ssl, nullptr);
   return true;
 }
 
@@ -325,7 +336,7 @@ static int ssl_encrypt_ticket_with_cipher_ctx(SSL_HANDSHAKE *hs, CBB *out,
   SSL_CTX *tctx = hs->ssl->session_ctx.get();
   uint8_t iv[EVP_MAX_IV_LENGTH];
   uint8_t key_name[16];
-  if (tctx->ticket_key_cb != NULL) {
+  if (tctx->ticket_key_cb != nullptr) {
     int ret = tctx->ticket_key_cb(hs->ssl, key_name, iv, ctx.get(), hctx.get(),
                                   1 /* encrypt */);
     if (ret < 0) {
@@ -342,10 +353,10 @@ static int ssl_encrypt_ticket_with_cipher_ctx(SSL_HANDSHAKE *hs, CBB *out,
     }
     MutexReadLock lock(&tctx->lock);
     if (!RAND_bytes(iv, 16) ||
-        !EVP_EncryptInit_ex(ctx.get(), EVP_aes_128_cbc(), NULL,
+        !EVP_EncryptInit_ex(ctx.get(), EVP_aes_128_cbc(), nullptr,
                             tctx->ticket_key_current->aes_key, iv) ||
         !HMAC_Init_ex(hctx.get(), tctx->ticket_key_current->hmac_key, 16,
-                      tlsext_tick_md(), NULL)) {
+                      tlsext_tick_md(), nullptr)) {
       return 0;
     }
     OPENSSL_memcpy(key_name, tctx->ticket_key_current->name, 16);
@@ -359,21 +370,23 @@ static int ssl_encrypt_ticket_with_cipher_ctx(SSL_HANDSHAKE *hs, CBB *out,
   }
 
   size_t total = 0;
-#if defined(BORINGSSL_UNSAFE_FUZZER_MODE)
-  OPENSSL_memcpy(ptr, session_buf, session_len);
-  total = session_len;
-#else
-  int len;
-  if (!EVP_EncryptUpdate(ctx.get(), ptr + total, &len, session_buf,
-                         session_len)) {
-    return 0;
+  if (CRYPTO_fuzzer_mode_enabled()) {
+    OPENSSL_memcpy(ptr, session_buf, session_len);
+    total = session_len;
+  } else {
+    size_t len;
+    if (!EVP_EncryptUpdate_ex(ctx.get(), ptr + total, &len,
+                              session_len + EVP_MAX_BLOCK_LENGTH - total,
+                              session_buf, session_len)) {
+      return 0;
+    }
+    total += len;
+    if (!EVP_EncryptFinal_ex2(ctx.get(), ptr + total, &len,
+                              session_len + EVP_MAX_BLOCK_LENGTH - total)) {
+      return 0;
+    }
+    total += len;
   }
-  total += len;
-  if (!EVP_EncryptFinal_ex(ctx.get(), ptr + total, &len)) {
-    return 0;
-  }
-  total += len;
-#endif
   if (!CBB_did_write(out, total)) {
     return 0;
   }
@@ -461,7 +474,7 @@ bool ssl_session_is_context_valid(const SSL_HANDSHAKE *hs,
 }
 
 bool ssl_session_is_time_valid(const SSL *ssl, const SSL_SESSION *session) {
-  if (session == NULL) {
+  if (session == nullptr) {
     return false;
   }
 
@@ -493,11 +506,10 @@ bool ssl_session_is_resumable(const SSL_HANDSHAKE *hs,
          // simplicity. If loosening this, the 0-RTT accept logic must be
          // updated to check the cipher.
          hs->new_cipher == session->cipher &&
-         // If the session contains a client certificate (either the full
-         // certificate or just the hash) then require that the form of the
-         // certificate matches the current configuration.
-         ((sk_CRYPTO_BUFFER_num(session->certs.get()) == 0 &&
-           !session->peer_sha256_valid) ||
+         // If the session contains a client certificate/RPK (either the full
+         // certificate/RPK or just the hash) then require that the form of the
+         // certificate/RPK matches the current configuration.
+         (!ssl_session_has_peer_cred(session) ||
           session->peer_sha256_valid ==
               hs->config->retain_only_sha256_of_client_certs) &&
          // Only resume if the underlying transport protocol hasn't changed.
@@ -592,7 +604,8 @@ enum ssl_hs_wait_t ssl_get_prev_session(SSL_HANDSHAKE *hs,
   if (tickets_supported && CBS_len(&ticket) != 0) {
     switch (ssl_process_ticket(
         hs, &session, &renew_ticket, ticket,
-        Span(client_hello->session_id, client_hello->session_id_len))) {
+        Span(client_hello->session_id, client_hello->session_id_len),
+        /*save_ticket=*/false)) {
       case ssl_ticket_aead_success:
         break;
       case ssl_ticket_aead_ignore_ticket:
@@ -625,7 +638,7 @@ static bool remove_session(SSL_CTX *ctx, SSL_SESSION *session, bool lock) {
   }
 
   if (lock) {
-    CRYPTO_MUTEX_lock_write(&ctx->lock);
+    ctx->lock.LockWrite();
   }
 
   SSL_SESSION *found_session = lh_SSL_SESSION_retrieve(ctx->sessions, session);
@@ -636,7 +649,7 @@ static bool remove_session(SSL_CTX *ctx, SSL_SESSION *session, bool lock) {
   }
 
   if (lock) {
-    CRYPTO_MUTEX_unlock_write(&ctx->lock);
+    ctx->lock.UnlockWrite();
   }
 
   if (found) {
@@ -661,7 +674,7 @@ void ssl_set_session(SSL *ssl, SSL_SESSION *session) {
 
 // locked by SSL_CTX in the calling function
 static void SSL_SESSION_list_remove(SSL_CTX *ctx, SSL_SESSION *session) {
-  if (session->next == NULL || session->prev == NULL) {
+  if (session->next == nullptr || session->prev == nullptr) {
     return;
   }
 
@@ -669,8 +682,8 @@ static void SSL_SESSION_list_remove(SSL_CTX *ctx, SSL_SESSION *session) {
     // last element in list
     if (session->prev == (SSL_SESSION *)&ctx->session_cache_head) {
       // only one element in list
-      ctx->session_cache_head = NULL;
-      ctx->session_cache_tail = NULL;
+      ctx->session_cache_head = nullptr;
+      ctx->session_cache_tail = nullptr;
     } else {
       ctx->session_cache_tail = session->prev;
       session->prev->next = (SSL_SESSION *)&(ctx->session_cache_tail);
@@ -685,15 +698,15 @@ static void SSL_SESSION_list_remove(SSL_CTX *ctx, SSL_SESSION *session) {
       session->prev->next = session->next;
     }
   }
-  session->prev = session->next = NULL;
+  session->prev = session->next = nullptr;
 }
 
 static void SSL_SESSION_list_add(SSL_CTX *ctx, SSL_SESSION *session) {
-  if (session->next != NULL && session->prev != NULL) {
+  if (session->next != nullptr && session->prev != nullptr) {
     SSL_SESSION_list_remove(ctx, session);
   }
 
-  if (ctx->session_cache_head == NULL) {
+  if (ctx->session_cache_head == nullptr) {
     ctx->session_cache_head = session;
     ctx->session_cache_tail = session;
     session->prev = (SSL_SESSION *)&(ctx->session_cache_head);
@@ -797,6 +810,13 @@ void ssl_update_cache(SSL *ssl) {
   }
 }
 
+bool ssl_session_has_peer_cred(const SSL_SESSION *session) {
+  return sk_CRYPTO_BUFFER_num(SSL_SESSION_get0_peer_certificates(session)) >
+             0 ||
+         SSL_SESSION_get0_peer_rpk(session) != nullptr ||
+         session->peer_sha256_valid;
+}
+
 BSSL_NAMESPACE_END
 
 using namespace bssl;
@@ -810,13 +830,14 @@ ssl_session_st::ssl_session_st(const SSL_X509_METHOD *method)
       ticket_age_add_valid(false),
       is_server(false),
       is_quic(false),
-      has_application_settings(false) {
+      has_application_settings(false),
+      is_resumable_across_names(false) {
   CRYPTO_new_ex_data(&ex_data);
   time = ::time(nullptr);
 }
 
 ssl_session_st::~ssl_session_st() {
-  CRYPTO_free_ex_data(&g_ex_data_class, this, &ex_data);
+  CRYPTO_free_ex_data(&g_ex_data_class, &ex_data);
   x509_method->session_clear(this);
 }
 
@@ -838,7 +859,7 @@ void SSL_SESSION_free(SSL_SESSION *session) {
 
 const uint8_t *SSL_SESSION_get_id(const SSL_SESSION *session,
                                   unsigned *out_len) {
-  if (out_len != NULL) {
+  if (out_len != nullptr) {
     *out_len = session->session_id.size();
   }
   return session->session_id.data();
@@ -859,7 +880,7 @@ uint32_t SSL_SESSION_get_timeout(const SSL_SESSION *session) {
 }
 
 uint64_t SSL_SESSION_get_time(const SSL_SESSION *session) {
-  if (session == NULL) {
+  if (session == nullptr) {
     // NULL should crash, but silently accept it here for compatibility.
     return 0;
   }
@@ -873,6 +894,10 @@ X509 *SSL_SESSION_get0_peer(const SSL_SESSION *session) {
 const STACK_OF(CRYPTO_BUFFER) *SSL_SESSION_get0_peer_certificates(
     const SSL_SESSION *session) {
   return session->certs.get();
+}
+
+const EVP_PKEY *SSL_SESSION_get0_peer_rpk(const SSL_SESSION *session) {
+  return session->peer_raw_public_key.get();
 }
 
 void SSL_SESSION_get0_signed_cert_timestamp_list(const SSL_SESSION *session,
@@ -911,7 +936,7 @@ size_t SSL_SESSION_get_master_key(const SSL_SESSION *session, uint8_t *out,
 }
 
 uint64_t SSL_SESSION_set_time(SSL_SESSION *session, uint64_t time) {
-  if (session == NULL) {
+  if (session == nullptr) {
     return 0;
   }
 
@@ -920,7 +945,7 @@ uint64_t SSL_SESSION_set_time(SSL_SESSION *session, uint64_t time) {
 }
 
 uint32_t SSL_SESSION_set_timeout(SSL_SESSION *session, uint32_t timeout) {
-  if (session == NULL) {
+  if (session == nullptr) {
     return 0;
   }
 
@@ -931,7 +956,7 @@ uint32_t SSL_SESSION_set_timeout(SSL_SESSION *session, uint32_t timeout) {
 
 const uint8_t *SSL_SESSION_get0_id_context(const SSL_SESSION *session,
                                            unsigned *out_len) {
-  if (out_len != NULL) {
+  if (out_len != nullptr) {
     *out_len = session->sid_ctx.size();
   }
   return session->sid_ctx.data();
@@ -995,6 +1020,10 @@ void SSL_SESSION_get0_peer_sha256(const SSL_SESSION *session,
   }
 }
 
+int SSL_SESSION_is_resumable_across_names(const SSL_SESSION *session) {
+  return session->is_resumable_across_names;
+}
+
 int SSL_SESSION_early_data_capable(const SSL_SESSION *session) {
   return ssl_session_protocol_version(session) >= TLS1_3_VERSION &&
          session->ticket_max_early_data != 0;
@@ -1018,7 +1047,7 @@ SSL_SESSION *SSL_SESSION_copy_without_early_data(SSL_SESSION *session) {
   return copy.release();
 }
 
-SSL_SESSION *SSL_magic_pending_session_ptr(void) {
+SSL_SESSION *SSL_magic_pending_session_ptr() {
   return (SSL_SESSION *)&g_pending_session_magic;
 }
 
@@ -1052,7 +1081,7 @@ SSL_SESSION *SSL_get_session(const SSL *ssl) {
 
 SSL_SESSION *SSL_get1_session(SSL *ssl) {
   SSL_SESSION *ret = SSL_get_session(ssl);
-  if (ret != NULL) {
+  if (ret != nullptr) {
     SSL_SESSION_up_ref(ret);
   }
   return ret;
@@ -1086,7 +1115,7 @@ int SSL_CTX_remove_session(SSL_CTX *ctx, SSL_SESSION *session) {
 int SSL_set_session(SSL *ssl, SSL_SESSION *session) {
   // SSL_set_session may only be called before the handshake has started.
   if (ssl->s3->initial_handshake_complete ||  //
-      ssl->s3->hs == NULL ||                  //
+      ssl->s3->hs == nullptr ||               //
       ssl->s3->hs->state != 0) {
     abort();
   }
@@ -1096,7 +1125,7 @@ int SSL_set_session(SSL *ssl, SSL_SESSION *session) {
 }
 
 uint32_t SSL_CTX_set_timeout(SSL_CTX *ctx, uint32_t timeout) {
-  if (ctx == NULL) {
+  if (ctx == nullptr) {
     return 0;
   }
 
@@ -1111,7 +1140,7 @@ uint32_t SSL_CTX_set_timeout(SSL_CTX *ctx, uint32_t timeout) {
 }
 
 uint32_t SSL_CTX_get_timeout(const SSL_CTX *ctx) {
-  if (ctx == NULL) {
+  if (ctx == nullptr) {
     return 0;
   }
 
@@ -1139,7 +1168,7 @@ static void timeout_doall_arg(SSL_SESSION *session, void *void_param) {
     SSL_SESSION_list_remove(param->ctx, session);
     // TODO(https://crbug.com/boringssl/251): Callbacks should not be called
     // under a lock.
-    if (param->ctx->remove_session_cb != NULL) {
+    if (param->ctx->remove_session_cb != nullptr) {
       param->ctx->remove_session_cb(param->ctx, session);
     }
     SSL_SESSION_free(session);
@@ -1151,7 +1180,7 @@ void SSL_CTX_flush_sessions(SSL_CTX *ctx, uint64_t time) {
 
   tp.ctx = ctx;
   tp.cache = ctx->sessions;
-  if (tp.cache == NULL) {
+  if (tp.cache == nullptr) {
     return;
   }
   tp.time = time;
@@ -1190,6 +1219,14 @@ SSL_SESSION *(*SSL_CTX_sess_get_get_cb(SSL_CTX *ctx))(SSL *ssl,
                                                       int id_len,
                                                       int *out_copy) {
   return ctx->get_session_cb;
+}
+
+void SSL_CTX_set_resumption_across_names_enabled(SSL_CTX *ctx, int enabled) {
+  ctx->resumption_across_names_enabled = !!enabled;
+}
+
+void SSL_set_resumption_across_names_enabled(SSL *ssl, int enabled) {
+  ssl->resumption_across_names_enabled = !!enabled;
 }
 
 void SSL_CTX_set_info_callback(SSL_CTX *ctx, void (*cb)(const SSL *ssl,

@@ -1,16 +1,21 @@
-/*
- * Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright (c) 2012, Intel Corporation. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- *
- * Originally written by Shay Gueron (1, 2), and Vlad Krasnov (1)
- * (1) Intel Corporation, Israel Development Center, Haifa, Israel
- * (2) University of Haifa, Israel
- */
+// Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright (c) 2012, Intel Corporation. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Originally written by Shay Gueron (1, 2), and Vlad Krasnov (1)
+// (1) Intel Corporation, Israel Development Center, Haifa, Israel
+// (2) University of Haifa, Israel
 
 #include "rsaz_exp.h"
 
@@ -24,6 +29,8 @@
 #include "../../internal.h"
 
 
+using namespace bssl;
+
 // rsaz_one is 1 in RSAZ's representation.
 alignas(64) static const BN_ULONG rsaz_one[40] = {
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -34,12 +41,12 @@ alignas(64) static const BN_ULONG rsaz_two80[40] = {
     0, 0, 1 << 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0,       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-void RSAZ_1024_mod_exp_avx2(BN_ULONG result_norm[16],
-                            const BN_ULONG base_norm[16],
-                            const BN_ULONG exponent[16],
-                            const BN_ULONG m_norm[16], const BN_ULONG RR[16],
-                            BN_ULONG k0,
-                            BN_ULONG storage[MOD_EXP_CTIME_STORAGE_LEN]) {
+void bssl::RSAZ_1024_mod_exp_avx2(BN_ULONG result_norm[16],
+                                  const BN_ULONG base_norm[16],
+                                  const BN_ULONG exponent[16],
+                                  const BN_ULONG m_norm[16],
+                                  const BN_ULONG RR[16], BN_ULONG k0,
+                                  BN_ULONG storage[MOD_EXP_CTIME_STORAGE_LEN]) {
   static_assert(MOD_EXP_CTIME_ALIGN % 64 == 0,
                 "MOD_EXP_CTIME_ALIGN is too small");
   assert((uintptr_t)storage % 64 == 0);

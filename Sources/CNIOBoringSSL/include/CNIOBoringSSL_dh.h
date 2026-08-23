@@ -1,18 +1,21 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_DH_H
 #define OPENSSL_HEADER_DH_H
 
-#include "CNIOBoringSSL_base.h"
-
-#include "CNIOBoringSSL_thread.h"
+#include "CNIOBoringSSL_base.h"   // IWYU pragma: export
 
 #if defined(__cplusplus)
 extern "C" {
@@ -51,10 +54,13 @@ OPENSSL_EXPORT int DH_up_ref(DH *dh);
 
 // OPENSSL_DH_MAX_MODULUS_BITS is the maximum supported Diffie-Hellman group
 // modulus, in bits.
-#define OPENSSL_DH_MAX_MODULUS_BITS 10000
+#define OPENSSL_DH_MAX_MODULUS_BITS 8192
 
 // DH_bits returns the size of |dh|'s group modulus, in bits.
 OPENSSL_EXPORT unsigned DH_bits(const DH *dh);
+
+// DH_size returns the number of bytes in the DH group's prime.
+OPENSSL_EXPORT int DH_size(const DH *dh);
 
 // DH_get0_pub_key returns |dh|'s public key.
 OPENSSL_EXPORT const BIGNUM *DH_get0_pub_key(const DH *dh);
@@ -108,32 +114,38 @@ OPENSSL_EXPORT DH *DH_get_rfc7919_2048(void);
 
 // BN_get_rfc3526_prime_1536 sets |*ret| to the 1536-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_1536(BIGNUM *ret);
 
 // BN_get_rfc3526_prime_2048 sets |*ret| to the 2048-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_2048(BIGNUM *ret);
 
 // BN_get_rfc3526_prime_3072 sets |*ret| to the 3072-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_3072(BIGNUM *ret);
 
 // BN_get_rfc3526_prime_4096 sets |*ret| to the 4096-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_4096(BIGNUM *ret);
 
 // BN_get_rfc3526_prime_6144 sets |*ret| to the 6144-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_6144(BIGNUM *ret);
 
 // BN_get_rfc3526_prime_8192 sets |*ret| to the 8192-bit MODP group from RFC
 // 3526 and returns |ret|. If |ret| is NULL then a fresh |BIGNUM| is allocated
-// and returned. It returns NULL on allocation failure.
+// and returned. It returns NULL on allocation failure. The generator for this
+// group is 2.
 OPENSSL_EXPORT BIGNUM *BN_get_rfc3526_prime_8192(BIGNUM *ret);
 
 
@@ -202,13 +214,6 @@ OPENSSL_EXPORT int DH_compute_key_hashed(DH *dh, uint8_t *out, size_t *out_len,
 
 
 // Utility functions.
-
-// DH_size returns the number of bytes in the DH group's prime.
-OPENSSL_EXPORT int DH_size(const DH *dh);
-
-// DH_num_bits returns the minimum number of bits needed to represent the
-// absolute value of the DH group's prime.
-OPENSSL_EXPORT unsigned DH_num_bits(const DH *dh);
 
 #define DH_CHECK_P_NOT_PRIME 0x01
 #define DH_CHECK_P_NOT_SAFE_PRIME 0x02

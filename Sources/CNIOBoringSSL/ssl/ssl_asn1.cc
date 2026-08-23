@@ -1,25 +1,36 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright 2005 Nokia. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 #include <CNIOBoringSSL_bytestring.h>
 #include <CNIOBoringSSL_err.h>
+#include <CNIOBoringSSL_evp.h>
 #include <CNIOBoringSSL_mem.h>
+#include <CNIOBoringSSL_span.h>
 #include <CNIOBoringSSL_x509.h>
 
+#include "../crypto/bytestring/internal.h"
 #include "../crypto/internal.h"
 #include "internal.h"
 
@@ -63,6 +74,9 @@ BSSL_NAMESPACE_BEGIN
 //     peerALPS                [30] OCTET STRING OPTIONAL,
 //     -- Either both or none of localALPS and peerALPS must be present. If both
 //     -- are present, earlyALPN must be present and non-empty.
+//     resumableAcrossNames    [31] BOOLEAN OPTIONAL,
+//     peerCertType            [32] INTEGER DEFAULT 0,  -- defaults to X509(0)
+//     peerRawPublicKey        [33] SubjectPublicKeyInfo OPTIONAL,
 // }
 //
 // Note: historically this serialization has included other optional
@@ -130,10 +144,17 @@ static const CBS_ASN1_TAG kLocalALPSTag =
     CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 29;
 static const CBS_ASN1_TAG kPeerALPSTag =
     CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 30;
+static const CBS_ASN1_TAG kResumableAcrossNamesTag =
+    CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 31;
+static const CBS_ASN1_TAG kPeerCertTypeTag =
+    CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 32;
+static const CBS_ASN1_TAG kPeerRawPublicKeyTag =
+    CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 33;
+
 
 static int SSL_SESSION_to_bytes_full(const SSL_SESSION *in, CBB *cbb,
                                      int for_ticket) {
-  if (in == NULL || in->cipher == NULL) {
+  if (in == nullptr || in->cipher == nullptr) {
     return 0;
   }
 
@@ -142,7 +163,7 @@ static int SSL_SESSION_to_bytes_full(const SSL_SESSION *in, CBB *cbb,
       !CBB_add_asn1_uint64(&session, kVersion) ||
       !CBB_add_asn1_uint64(&session, in->ssl_version) ||
       !CBB_add_asn1(&session, &child, CBS_ASN1_OCTETSTRING) ||
-      !CBB_add_u16(&child, (uint16_t)(in->cipher->id & 0xffff)) ||
+      !CBB_add_u16(&child, in->cipher->protocol_id) ||
       // The session ID is irrelevant for a session ticket.
       !CBB_add_asn1_octet_string(&session, in->session_id.data(),
                                  for_ticket ? 0 : in->session_id.size()) ||
@@ -158,10 +179,10 @@ static int SSL_SESSION_to_bytes_full(const SSL_SESSION *in, CBB *cbb,
   // The peer certificate is only serialized if the SHA-256 isn't
   // serialized instead.
   if (sk_CRYPTO_BUFFER_num(in->certs.get()) > 0 && !in->peer_sha256_valid) {
+    assert(in->peer_cert_type == TLSEXT_cert_type_x509);
     const CRYPTO_BUFFER *buffer = sk_CRYPTO_BUFFER_value(in->certs.get(), 0);
-    if (!CBB_add_asn1(&session, &child, kPeerTag) ||
-        !CBB_add_bytes(&child, CRYPTO_BUFFER_data(buffer),
-                       CRYPTO_BUFFER_len(buffer))) {
+    if (!CBB_add_asn1_element(&session, kPeerTag, CRYPTO_BUFFER_data(buffer),
+                              CRYPTO_BUFFER_len(buffer))) {
       return 0;
     }
   }
@@ -254,9 +275,10 @@ static int SSL_SESSION_to_bytes_full(const SSL_SESSION *in, CBB *cbb,
 
   // The certificate chain is only serialized if the leaf's SHA-256 isn't
   // serialized instead.
-  if (in->certs != NULL &&       //
+  if (in->certs != nullptr &&    //
       !in->peer_sha256_valid &&  //
       sk_CRYPTO_BUFFER_num(in->certs.get()) >= 2) {
+    assert(in->peer_cert_type == TLSEXT_cert_type_x509);
     if (!CBB_add_asn1(&session, &child, kCertChainTag)) {
       return 0;
     }
@@ -337,7 +359,43 @@ static int SSL_SESSION_to_bytes_full(const SSL_SESSION *in, CBB *cbb,
     }
   }
 
+  if (in->is_resumable_across_names) {
+    if (!CBB_add_asn1(&session, &child, kResumableAcrossNamesTag) ||
+        !CBB_add_asn1_bool(&child, true)) {
+      return 0;
+    }
+  }
+
+  if (in->peer_cert_type != kDefaultCertType) {
+    if (!CBB_add_asn1(&session, &child, kPeerCertTypeTag) ||
+        !CBB_add_asn1_uint64(&child, in->peer_cert_type)) {
+      return 0;
+    }
+  }
+  // The peer RPK is only serialized if the SHA-256 isn't serialized instead.
+  if (in->peer_raw_public_key != nullptr && !in->peer_sha256_valid) {
+    assert(in->peer_cert_type == TLSEXT_cert_type_rpk);
+    if (!CBB_add_asn1(&session, &child, kPeerRawPublicKeyTag) ||
+        !EVP_marshal_public_key(&child, in->peer_raw_public_key.get())) {
+      return 0;
+    }
+  }
+
   return CBB_flush(cbb);
+}
+
+static int SSL_SESSION_to_bytes_if_not_resumable(const SSL_SESSION *in,
+                                                 CBB *out, int for_ticket) {
+  if (in->not_resumable) {
+    // If the caller has an unresumable session, e.g. if |SSL_get_session|
+    // were called on a TLS 1.3 or False Started connection, serialize with
+    // a placeholder value so it is not accidentally deserialized into a
+    // resumable one.
+    const auto kNotResumableSession = StringAsBytes("NOT RESUMABLE");
+    return CBB_add_bytes(out, kNotResumableSession.data(),
+                         kNotResumableSession.size());
+  }
+  return SSL_SESSION_to_bytes_full(in, out, for_ticket);
 }
 
 // SSL_SESSION_parse_string gets an optional ASN.1 OCTET STRING explicitly
@@ -374,7 +432,7 @@ static int SSL_SESSION_parse_string(CBS *cbs, UniquePtr<char> *out,
 static bool SSL_SESSION_parse_octet_string(CBS *cbs, Array<uint8_t> *out,
                                            CBS_ASN1_TAG tag) {
   CBS value;
-  if (!CBS_get_optional_asn1_octet_string(cbs, &value, NULL, tag)) {
+  if (!CBS_get_optional_asn1_octet_string(cbs, &value, nullptr, tag)) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
     return false;
   }
@@ -477,7 +535,7 @@ UniquePtr<SSL_SESSION> SSL_SESSION_parse(CBS *cbs,
     return nullptr;
   }
   ret->cipher = SSL_get_cipher_by_value(cipher_value);
-  if (ret->cipher == NULL) {
+  if (ret->cipher == nullptr) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_UNSUPPORTED_CIPHER);
     return nullptr;
   }
@@ -577,7 +635,7 @@ UniquePtr<SSL_SESSION> SSL_SESSION_parse(CBS *cbs,
   }
 
   CBS cert_chain;
-  CBS_init(&cert_chain, NULL, 0);
+  CBS_init(&cert_chain, nullptr, 0);
   int has_cert_chain;
   if (!CBS_get_optional_asn1(&session, &cert_chain, &has_cert_chain,
                              kCertChainTag) ||
@@ -605,7 +663,7 @@ UniquePtr<SSL_SESSION> SSL_SESSION_parse(CBS *cbs,
 
     while (CBS_len(&cert_chain) > 0) {
       CBS cert;
-      if (!CBS_get_any_asn1_element(&cert_chain, &cert, NULL, NULL) ||
+      if (!CBS_get_any_asn1_element(&cert_chain, &cert, nullptr, nullptr) ||
           CBS_len(&cert) == 0) {
         OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
         return nullptr;
@@ -659,18 +717,66 @@ UniquePtr<SSL_SESSION> SSL_SESSION_parse(CBS *cbs,
   }
 
   CBS settings;
-  int has_local_alps, has_peer_alps;
+  int has_local_alps, has_peer_alps, is_resumable_across_names;
   if (!CBS_get_optional_asn1_octet_string(&session, &settings, &has_local_alps,
                                           kLocalALPSTag) ||
       !ret->local_application_settings.CopyFrom(settings) ||
       !CBS_get_optional_asn1_octet_string(&session, &settings, &has_peer_alps,
                                           kPeerALPSTag) ||
       !ret->peer_application_settings.CopyFrom(settings) ||
-      CBS_len(&session) != 0) {
+      !CBS_get_optional_asn1_bool(&session, &is_resumable_across_names,
+                                  kResumableAcrossNamesTag,
+                                  /*default_value=*/false)) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
     return nullptr;
   }
   ret->is_quic = is_quic;
+  ret->is_resumable_across_names = is_resumable_across_names;
+
+  if (CBS_peek_asn1_tag(&session, kPeerCertTypeTag)) {
+    uint64_t peer_cert_type_value;
+    if (!CBS_get_optional_asn1_uint64(&session, &peer_cert_type_value,
+                                      kPeerCertTypeTag, kDefaultCertType)) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+      return nullptr;
+    }
+    // The default value was erroneously serialized, or an unknown value was
+    // present.
+    if (peer_cert_type_value == kDefaultCertType ||
+        std::find(std::begin(kAllCertTypes), std::end(kAllCertTypes),
+                  peer_cert_type_value) == std::end(kAllCertTypes)) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+      return nullptr;
+    }
+    ret->peer_cert_type = static_cast<uint8_t>(peer_cert_type_value);
+    int has_peer_rpk;
+    if (!CBS_get_optional_asn1(&session, &child, &has_peer_rpk,
+                               kPeerRawPublicKeyTag)) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+      return nullptr;
+    }
+    if (has_peer_rpk) {
+      ret->peer_raw_public_key = ssl_parse_peer_subject_public_key_info(child);
+      if (ret->peer_raw_public_key == nullptr ||
+          ret->peer_cert_type != TLSEXT_cert_type_rpk ||  //
+          has_peer || has_cert_chain) {
+        OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+        return nullptr;
+      }
+    }
+  }
+
+  // End of fields. There should be no trailing data.
+  if (CBS_len(&session) != 0) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+    return nullptr;
+  }
+
+  if (ret->peer_cert_type != TLSEXT_cert_type_x509 &&
+      (has_peer || has_cert_chain)) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
+    return nullptr;
+  }
 
   // The two ALPS values and ALPN must be consistent.
   if (has_local_alps != has_peer_alps ||
@@ -698,29 +804,12 @@ using namespace bssl;
 
 int SSL_SESSION_to_bytes(const SSL_SESSION *in, uint8_t **out_data,
                          size_t *out_len) {
-  if (in->not_resumable) {
-    // If the caller has an unresumable session, e.g. if |SSL_get_session| were
-    // called on a TLS 1.3 or False Started connection, serialize with a
-    // placeholder value so it is not accidentally deserialized into a resumable
-    // one.
-    static const char kNotResumableSession[] = "NOT RESUMABLE";
-
-    *out_len = strlen(kNotResumableSession);
-    *out_data = (uint8_t *)OPENSSL_memdup(kNotResumableSession, *out_len);
-    if (*out_data == NULL) {
-      return 0;
-    }
-
-    return 1;
-  }
-
   ScopedCBB cbb;
   if (!CBB_init(cbb.get(), 256) ||
-      !SSL_SESSION_to_bytes_full(in, cbb.get(), 0) ||
+      !SSL_SESSION_to_bytes_if_not_resumable(in, cbb.get(), 0) ||
       !CBB_finish(cbb.get(), out_data, out_len)) {
     return 0;
   }
-
   return 1;
 }
 
@@ -732,31 +821,16 @@ int SSL_SESSION_to_bytes_for_ticket(const SSL_SESSION *in, uint8_t **out_data,
       !CBB_finish(cbb.get(), out_data, out_len)) {
     return 0;
   }
-
   return 1;
 }
 
 int i2d_SSL_SESSION(SSL_SESSION *in, uint8_t **pp) {
-  uint8_t *out;
-  size_t len;
-
-  if (!SSL_SESSION_to_bytes(in, &out, &len)) {
-    return -1;
+  ScopedCBB cbb;
+  if (!CBB_init(cbb.get(), 256) ||
+      !SSL_SESSION_to_bytes_if_not_resumable(in, cbb.get(), 0)) {
+    return 0;
   }
-
-  if (len > INT_MAX) {
-    OPENSSL_free(out);
-    OPENSSL_PUT_ERROR(SSL, ERR_R_OVERFLOW);
-    return -1;
-  }
-
-  if (pp) {
-    OPENSSL_memcpy(*pp, out, len);
-    *pp += len;
-  }
-  OPENSSL_free(out);
-
-  return len;
+  return CBB_finish_i2d(cbb.get(), pp);
 }
 
 SSL_SESSION *SSL_SESSION_from_bytes(const uint8_t *in, size_t in_len,
@@ -766,11 +840,11 @@ SSL_SESSION *SSL_SESSION_from_bytes(const uint8_t *in, size_t in_len,
   UniquePtr<SSL_SESSION> ret =
       SSL_SESSION_parse(&cbs, ctx->x509_method, ctx->pool);
   if (!ret) {
-    return NULL;
+    return nullptr;
   }
   if (CBS_len(&cbs) != 0) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_SSL_SESSION);
-    return NULL;
+    return nullptr;
   }
   return ret.release();
 }

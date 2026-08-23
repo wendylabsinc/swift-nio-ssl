@@ -1,11 +1,16 @@
-/*
- * Copyright 2010-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2010-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_cmac.h>
 
@@ -18,8 +23,11 @@
 #include <CNIOBoringSSL_mem.h>
 
 #include "../../internal.h"
+#include "../../mem_internal.h"
 #include "../service_indicator/internal.h"
 
+
+using namespace bssl;
 
 struct cmac_ctx_st {
   EVP_CIPHER_CTX cipher_ctx;
@@ -67,7 +75,7 @@ int AES_CMAC(uint8_t out[16], const uint8_t *key, size_t key_len,
   // We have to verify that all the CMAC services actually succeed before
   // updating the indicator state, so we lock the state here.
   FIPS_service_indicator_lock_state();
-  const int ok = CMAC_Init(&ctx, key, key_len, cipher, NULL /* engine */) &&
+  const int ok = CMAC_Init(&ctx, key, key_len, cipher, nullptr /* engine */) &&
                  CMAC_Update(&ctx, in, in_len) &&
                  CMAC_Final(&ctx, out, &scratch_out_len);
   FIPS_service_indicator_unlock_state();
@@ -79,21 +87,21 @@ int AES_CMAC(uint8_t out[16], const uint8_t *key, size_t key_len,
   return ok;
 }
 
-CMAC_CTX *CMAC_CTX_new(void) {
-  CMAC_CTX *ctx = reinterpret_cast<CMAC_CTX *>(OPENSSL_malloc(sizeof(*ctx)));
-  if (ctx != NULL) {
+CMAC_CTX *CMAC_CTX_new() {
+  CMAC_CTX *ctx = New<CMAC_CTX>();
+  if (ctx != nullptr) {
     CMAC_CTX_init(ctx);
   }
   return ctx;
 }
 
 void CMAC_CTX_free(CMAC_CTX *ctx) {
-  if (ctx == NULL) {
+  if (ctx == nullptr) {
     return;
   }
 
   CMAC_CTX_cleanup(ctx);
-  OPENSSL_free(ctx);
+  Delete(ctx);
 }
 
 int CMAC_CTX_copy(CMAC_CTX *out, const CMAC_CTX *in) {
@@ -155,11 +163,12 @@ int CMAC_Init(CMAC_CTX *ctx, const void *key, size_t key_len,
   size_t block_size = EVP_CIPHER_block_size(cipher);
   if ((block_size != AES_BLOCK_SIZE && block_size != 8 /* 3-DES */) ||
       EVP_CIPHER_key_length(cipher) != key_len ||
-      !EVP_EncryptInit_ex(&ctx->cipher_ctx, cipher, NULL,
+      !EVP_EncryptInit_ex(&ctx->cipher_ctx, cipher, nullptr,
                           reinterpret_cast<const uint8_t *>(key), kZeroIV) ||
       !EVP_Cipher(&ctx->cipher_ctx, scratch, kZeroIV, block_size) ||
       // Reset context again ready for first data.
-      !EVP_EncryptInit_ex(&ctx->cipher_ctx, NULL, NULL, NULL, kZeroIV)) {
+      !EVP_EncryptInit_ex(&ctx->cipher_ctx, nullptr, nullptr, nullptr,
+                          kZeroIV)) {
     goto out;
   }
 
@@ -180,7 +189,8 @@ out:
 
 int CMAC_Reset(CMAC_CTX *ctx) {
   ctx->block_used = 0;
-  return EVP_EncryptInit_ex(&ctx->cipher_ctx, NULL, NULL, NULL, kZeroIV);
+  return EVP_EncryptInit_ex(&ctx->cipher_ctx, nullptr, nullptr, nullptr,
+                            kZeroIV);
 }
 
 int CMAC_Update(CMAC_CTX *ctx, const uint8_t *in, size_t in_len) {
@@ -254,7 +264,7 @@ int CMAC_Final(CMAC_CTX *ctx, uint8_t *out, size_t *out_len) {
 
   *out_len = block_size;
   const uint8_t *mask = ctx->k1;
-  if (out == NULL) {
+  if (out == nullptr) {
     ret = 1;
     goto out;
   }

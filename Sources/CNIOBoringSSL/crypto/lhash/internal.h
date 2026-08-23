@@ -1,29 +1,31 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#ifndef OPENSSL_HEADER_LHASH_INTERNAL_H
-#define OPENSSL_HEADER_LHASH_INTERNAL_H
+#ifndef OPENSSL_HEADER_CRYPTO_LHASH_INTERNAL_H
+#define OPENSSL_HEADER_CRYPTO_LHASH_INTERNAL_H
 
-#include <CNIOBoringSSL_lhash.h>
+#include <CNIOBoringSSL_base.h>
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
 
+BSSL_NAMESPACE_BEGIN
 
 // lhash is a traditional, chaining hash table that automatically expands and
 // contracts as needed. One should not use the lh_* functions directly, rather
 // use the type-safe macro wrappers:
 //
 // A hash table of a specific type of object has type |LHASH_OF(type)|. This
-// can be defined (once) with |DEFINE_LHASH_OF(type)| and declared where needed
-// with |DECLARE_LHASH_OF(type)|. For example:
+// can be defined (once) with |DEFINE_LHASH_OF(type)|.
 //
 //   struct foo {
 //     int bar;
@@ -35,7 +37,12 @@ extern "C" {
 //
 // A macro will be defined for each of the |OPENSSL_lh_*| functions below. For
 // |LHASH_OF(foo)|, the macros would be |lh_foo_new|, |lh_foo_num_items| etc.
+//
+// TODO(davidben): Now that this type is completely internal, this can just be a
+// C++ template without any macros.
 
+
+#define LHASH_OF(type) struct bssl::type##_lhash_st
 
 // lhash_cmp_func is a comparison function that returns a value equal, or not
 // equal, to zero depending on whether |*a| is equal, or not equal to |*b|,
@@ -58,7 +65,7 @@ typedef int (*lhash_cmp_func_helper)(lhash_cmp_func func, const void *a,
 typedef uint32_t (*lhash_hash_func)(const void *a);
 typedef uint32_t (*lhash_hash_func_helper)(lhash_hash_func func, const void *a);
 
-typedef struct lhash_st _LHASH;
+struct _LHASH;
 
 // OPENSSL_lh_new returns a new, empty hash table or NULL on error.
 OPENSSL_EXPORT _LHASH *OPENSSL_lh_new(lhash_hash_func hash,
@@ -109,6 +116,8 @@ OPENSSL_EXPORT void OPENSSL_lh_doall_arg(_LHASH *lh,
                                          void (*func)(void *, void *),
                                          void *arg);
 
+// DEFINE_LHASH_OF creates (inline) definitions of hash table. It must be used
+// from within the bssl namespace.
 #define DEFINE_LHASH_OF(type)                                                  \
   /* We disable MSVC C4191 in this macro, which warns when pointers are cast   \
    * to the wrong type. While the cast itself is valid, it is often a bug      \
@@ -120,7 +129,7 @@ OPENSSL_EXPORT void OPENSSL_lh_doall_arg(_LHASH *lh,
   OPENSSL_MSVC_PRAGMA(warning(push))                                           \
   OPENSSL_MSVC_PRAGMA(warning(disable : 4191))                                 \
                                                                                \
-  DECLARE_LHASH_OF(type)                                                       \
+  struct type##_lhash_st;                                                      \
                                                                                \
   typedef int (*lhash_##type##_cmp_func)(const type *, const type *);          \
   typedef uint32_t (*lhash_##type##_hash_func)(const type *);                  \
@@ -176,7 +185,7 @@ OPENSSL_EXPORT void OPENSSL_lh_doall_arg(_LHASH *lh,
                                                                                \
   inline int lh_##type##_insert(LHASH_OF(type) *lh, type **old_data,           \
                                 type *data) {                                  \
-    void *old_data_void = NULL;                                                \
+    void *old_data_void = nullptr;                                             \
     int ret = OPENSSL_lh_insert((_LHASH *)lh, &old_data_void, data,            \
                                 lh_##type##_call_hash_func,                    \
                                 lh_##type##_call_cmp_func);                    \
@@ -208,9 +217,6 @@ OPENSSL_EXPORT void OPENSSL_lh_doall_arg(_LHASH *lh,
                                                                                \
   OPENSSL_MSVC_PRAGMA(warning(pop))
 
+BSSL_NAMESPACE_END
 
-#if defined(__cplusplus)
-}  // extern C
-#endif
-
-#endif  // OPENSSL_HEADER_LHASH_INTERNAL_H
+#endif  // OPENSSL_HEADER_CRYPTO_LHASH_INTERNAL_H

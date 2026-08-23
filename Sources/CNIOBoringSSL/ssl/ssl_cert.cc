@@ -1,12 +1,17 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -18,20 +23,23 @@
 
 #include <CNIOBoringSSL_bn.h>
 #include <CNIOBoringSSL_bytestring.h>
+#include <CNIOBoringSSL_ec.h>
 #include <CNIOBoringSSL_ec_key.h>
 #include <CNIOBoringSSL_err.h>
+#include <CNIOBoringSSL_evp.h>
 #include <CNIOBoringSSL_mem.h>
-#include <CNIOBoringSSL_sha.h>
+#include <CNIOBoringSSL_sha2.h>
 #include <CNIOBoringSSL_x509.h>
 
 #include "../crypto/internal.h"
+#include "../crypto/mem_internal.h"
 #include "internal.h"
 
 
 BSSL_NAMESPACE_BEGIN
 
 CERT::CERT(const SSL_X509_METHOD *x509_method_arg)
-    : legacy_credential(MakeUnique<SSL_CREDENTIAL>(SSLCredentialType::kX509)),
+    : legacy_credential(MakeUnique<SSLCredential>(SSLCredentialType::kX509)),
       x509_method(x509_method_arg) {}
 
 CERT::~CERT() { x509_method->cert_free(this); }
@@ -75,12 +83,12 @@ static int cert_set_chain_and_key(
     CERT *cert, CRYPTO_BUFFER *const *certs, size_t num_certs,
     EVP_PKEY *privkey, const SSL_PRIVATE_KEY_METHOD *privkey_method) {
   if (num_certs == 0 ||  //
-      (privkey == NULL && privkey_method == NULL)) {
+      (privkey == nullptr && privkey_method == nullptr)) {
     OPENSSL_PUT_ERROR(SSL, ERR_R_PASSED_NULL_PARAMETER);
     return 0;
   }
 
-  if (privkey != NULL && privkey_method != NULL) {
+  if (privkey != nullptr && privkey_method != nullptr) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_CANNOT_HAVE_BOTH_PRIVKEY_AND_METHOD);
     return 0;
   }
@@ -157,7 +165,7 @@ bool ssl_parse_cert_chain(uint8_t *out_alert,
       }
 
       // Retain the hash of the leaf certificate if requested.
-      if (out_leaf_sha256 != NULL) {
+      if (out_leaf_sha256 != nullptr) {
         SHA256(CBS_data(&certificate), CBS_len(&certificate), out_leaf_sha256);
       }
     }
@@ -173,6 +181,40 @@ bool ssl_parse_cert_chain(uint8_t *out_alert,
 
   *out_chain = std::move(chain);
   *out_pubkey = std::move(pubkey);
+  return true;
+}
+
+bool ssl_parse_rpk_cert(uint8_t *out_alert,
+                        UniquePtr<EVP_PKEY> *out_raw_public_key,
+                        UniquePtr<EVP_PKEY> *out_pubkey,
+                        uint8_t *out_rpk_sha256, CBS *cbs) {
+  out_raw_public_key->reset();
+  out_pubkey->reset();
+  CBS spki;
+  if (!CBS_get_u24_length_prefixed(cbs, &spki) ||  //
+      CBS_len(cbs) != 0) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_RAW_PUBLIC_KEY);
+    *out_alert = SSL_AD_DECODE_ERROR;
+    return false;
+  }
+  // The TLS 1.2 Certificate format for Raw Public Keys in RFC 7250 does not
+  // permit the peer to decline to send a Certificate, which is possible to do
+  // with X.509 Certificates, but we allow a client to do this by sending an
+  // empty RPK SPKI.
+  if (CBS_len(&spki) == 0) {
+    return true;
+  }
+  *out_raw_public_key = ssl_parse_peer_subject_public_key_info(spki);
+  if (*out_raw_public_key == nullptr) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_INVALID_RAW_PUBLIC_KEY);
+    *out_alert = SSL_AD_DECODE_ERROR;
+    return false;
+  }
+  // Retain the hash of the leaf certificate if requested.
+  if (out_rpk_sha256 != nullptr) {
+    SHA256(CBS_data(&spki), CBS_len(&spki), out_rpk_sha256);
+  }
+  *out_pubkey = UpRef(*out_raw_public_key);
   return true;
 }
 
@@ -203,19 +245,19 @@ static bool ssl_cert_skip_to_spki(const CBS *in, CBS *out_tbs_cert) {
       !CBS_get_asn1(&toplevel, out_tbs_cert, CBS_ASN1_SEQUENCE) ||  //
       // version
       !CBS_get_optional_asn1(
-          out_tbs_cert, NULL, NULL,
+          out_tbs_cert, nullptr, nullptr,
           CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 0) ||  //
 
       // serialNumber
-      !CBS_get_asn1(out_tbs_cert, NULL, CBS_ASN1_INTEGER) ||
+      !CBS_get_asn1(out_tbs_cert, nullptr, CBS_ASN1_INTEGER) ||
       // signature algorithm
-      !CBS_get_asn1(out_tbs_cert, NULL, CBS_ASN1_SEQUENCE) ||
+      !CBS_get_asn1(out_tbs_cert, nullptr, CBS_ASN1_SEQUENCE) ||
       // issuer
-      !CBS_get_asn1(out_tbs_cert, NULL, CBS_ASN1_SEQUENCE) ||
+      !CBS_get_asn1(out_tbs_cert, nullptr, CBS_ASN1_SEQUENCE) ||
       // validity
-      !CBS_get_asn1(out_tbs_cert, NULL, CBS_ASN1_SEQUENCE) ||
+      !CBS_get_asn1(out_tbs_cert, nullptr, CBS_ASN1_SEQUENCE) ||
       // subject
-      !CBS_get_asn1(out_tbs_cert, NULL, CBS_ASN1_SEQUENCE)) {
+      !CBS_get_asn1(out_tbs_cert, nullptr, CBS_ASN1_SEQUENCE)) {
     return false;
   }
 
@@ -232,12 +274,12 @@ bool ssl_cert_extract_issuer(const CBS *in, CBS *out_dn) {
       !CBS_get_asn1(&toplevel, &cert, CBS_ASN1_SEQUENCE) ||  //
       // version
       !CBS_get_optional_asn1(
-          &cert, NULL, NULL,
+          &cert, nullptr, nullptr,
           CBS_ASN1_CONSTRUCTED | CBS_ASN1_CONTEXT_SPECIFIC | 0) ||  //
       // serialNumber
-      !CBS_get_asn1(&cert, NULL, CBS_ASN1_INTEGER) ||  //
+      !CBS_get_asn1(&cert, nullptr, CBS_ASN1_INTEGER) ||  //
       // signature algorithm
-      !CBS_get_asn1(&cert, NULL, CBS_ASN1_SEQUENCE) ||  //
+      !CBS_get_asn1(&cert, nullptr, CBS_ASN1_SEQUENCE) ||  //
       // issuer
       !CBS_get_asn1_element(&cert, out_dn, CBS_ASN1_SEQUENCE)) {
     return false;
@@ -255,13 +297,14 @@ bool ssl_cert_matches_issuer(const CBS *in, const CBS *dn) {
 }
 
 UniquePtr<EVP_PKEY> ssl_cert_parse_pubkey(const CBS *in) {
-  CBS buf = *in, tbs_cert;
-  if (!ssl_cert_skip_to_spki(&buf, &tbs_cert)) {
+  CBS buf = *in, tbs_cert, spki;
+  if (!ssl_cert_skip_to_spki(&buf, &tbs_cert) ||
+      !CBS_get_asn1_element(&tbs_cert, &spki, CBS_ASN1_SEQUENCE)) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_CANNOT_PARSE_LEAF_CERT);
     return nullptr;
   }
 
-  return UniquePtr<EVP_PKEY>(EVP_parse_public_key(&tbs_cert));
+  return ssl_parse_peer_subject_public_key_info(spki);
 }
 
 bool ssl_compare_public_and_private_key(const EVP_PKEY *pubkey,
@@ -272,22 +315,16 @@ bool ssl_compare_public_and_private_key(const EVP_PKEY *pubkey,
     return true;
   }
 
-  switch (EVP_PKEY_cmp(pubkey, privkey)) {
-    case 1:
-      return true;
-    case 0:
-      OPENSSL_PUT_ERROR(X509, X509_R_KEY_VALUES_MISMATCH);
-      return false;
-    case -1:
+  if (EVP_PKEY_eq(pubkey, privkey) != 1) {
+    if (EVP_PKEY_id(pubkey) != EVP_PKEY_id(privkey)) {
       OPENSSL_PUT_ERROR(X509, X509_R_KEY_TYPE_MISMATCH);
-      return false;
-    case -2:
-      OPENSSL_PUT_ERROR(X509, X509_R_UNKNOWN_KEY_TYPE);
-      return false;
+    } else {
+      OPENSSL_PUT_ERROR(X509, X509_R_KEY_VALUES_MISMATCH);
+    }
+    return false;
   }
 
-  assert(0);
-  return false;
+  return true;
 }
 
 bool ssl_cert_check_key_usage(const CBS *in, enum ssl_key_usage_t bit) {
@@ -297,12 +334,12 @@ bool ssl_cert_check_key_usage(const CBS *in, enum ssl_key_usage_t bit) {
   int has_extensions;
   if (!ssl_cert_skip_to_spki(&buf, &tbs_cert) ||
       // subjectPublicKeyInfo
-      !CBS_get_asn1(&tbs_cert, NULL, CBS_ASN1_SEQUENCE) ||
+      !CBS_get_asn1(&tbs_cert, nullptr, CBS_ASN1_SEQUENCE) ||
       // issuerUniqueID
-      !CBS_get_optional_asn1(&tbs_cert, NULL, NULL,
+      !CBS_get_optional_asn1(&tbs_cert, nullptr, nullptr,
                              CBS_ASN1_CONTEXT_SPECIFIC | 1) ||
       // subjectUniqueID
-      !CBS_get_optional_asn1(&tbs_cert, NULL, NULL,
+      !CBS_get_optional_asn1(&tbs_cert, nullptr, nullptr,
                              CBS_ASN1_CONTEXT_SPECIFIC | 2) ||
       !CBS_get_optional_asn1(
           &tbs_cert, &outer_extensions, &has_extensions,
@@ -326,7 +363,7 @@ bool ssl_cert_check_key_usage(const CBS *in, enum ssl_key_usage_t bit) {
     if (!CBS_get_asn1(&extensions, &extension, CBS_ASN1_SEQUENCE) ||
         !CBS_get_asn1(&extension, &oid, CBS_ASN1_OBJECT) ||
         (CBS_peek_asn1_tag(&extension, CBS_ASN1_BOOLEAN) &&
-         !CBS_get_asn1(&extension, NULL, CBS_ASN1_BOOLEAN)) ||
+         !CBS_get_asn1(&extension, nullptr, CBS_ASN1_BOOLEAN)) ||
         !CBS_get_asn1(&extension, &contents, CBS_ASN1_OCTETSTRING) ||
         CBS_len(&extension) != 0) {
       OPENSSL_PUT_ERROR(SSL, SSL_R_CANNOT_PARSE_LEAF_CERT);
@@ -483,12 +520,11 @@ bool ssl_check_leaf_certificate(SSL_HANDSHAKE *hs, EVP_PKEY *pkey,
 
   if (EVP_PKEY_id(pkey) == EVP_PKEY_EC) {
     // Check the key's group and point format are acceptable.
-    EC_KEY *ec_key = EVP_PKEY_get0_EC_KEY(pkey);
     uint16_t group_id;
-    if (!ssl_nid_to_group_id(
-            &group_id, EC_GROUP_get_curve_name(EC_KEY_get0_group(ec_key))) ||
+    if (!ssl_nid_to_group_id(&group_id, EVP_PKEY_get_ec_curve_nid(pkey)) ||
         !tls1_check_group_id(hs, group_id) ||
-        EC_KEY_get_conv_form(ec_key) != POINT_CONVERSION_UNCOMPRESSED) {
+        EVP_PKEY_get_ec_point_conv_form(pkey) !=
+            POINT_CONVERSION_UNCOMPRESSED) {
       OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_ECC_CERT);
       return false;
     }
@@ -542,7 +578,7 @@ const STACK_OF(CRYPTO_BUFFER) *SSL_get0_chain(const SSL *ssl) {
 
 int SSL_CTX_use_certificate_ASN1(SSL_CTX *ctx, size_t der_len,
                                  const uint8_t *der) {
-  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(der, der_len, NULL));
+  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(der, der_len, nullptr));
   if (!buffer) {
     return 0;
   }
@@ -551,7 +587,7 @@ int SSL_CTX_use_certificate_ASN1(SSL_CTX *ctx, size_t der_len,
 }
 
 int SSL_use_certificate_ASN1(SSL *ssl, const uint8_t *der, size_t der_len) {
-  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(der, der_len, NULL));
+  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(der, der_len, nullptr));
   if (!buffer || !ssl->config) {
     return 0;
   }
@@ -573,16 +609,16 @@ void SSL_set_cert_cb(SSL *ssl, int (*cb)(SSL *ssl, void *arg), void *arg) {
 
 const STACK_OF(CRYPTO_BUFFER) *SSL_get0_peer_certificates(const SSL *ssl) {
   SSL_SESSION *session = SSL_get_session(ssl);
-  if (session == NULL) {
-    return NULL;
+  if (session == nullptr) {
+    return nullptr;
   }
 
   return session->certs.get();
 }
 
 const STACK_OF(CRYPTO_BUFFER) *SSL_get0_server_requested_CAs(const SSL *ssl) {
-  if (ssl->s3->hs == NULL) {
-    return NULL;
+  if (ssl->s3->hs == nullptr) {
+    return nullptr;
   }
   return ssl->s3->hs->ca_names.get();
 }

@@ -1,19 +1,16 @@
-/* Copyright 2023 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
-
-#define OPENSSL_UNSTABLE_EXPERIMENTAL_KYBER
-#include <experimental/CNIOBoringSSL_kyber.h>
+// Copyright 2023 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <assert.h>
 #include <stdlib.h>
@@ -28,6 +25,8 @@
 
 // See
 // https://pq-crystals.org/kyber/data/kyber-specification-round3-20210804.pdf
+
+using namespace bssl;
 
 static void prf(uint8_t *out, size_t out_len, const uint8_t in[33]) {
   BORINGSSL_keccak(out, out_len, in, 33, boringssl_shake256);
@@ -247,7 +246,7 @@ static void scalar_sub(scalar *lhs, const scalar *rhs) {
 // the 2*ith and (2*i+1)th entries of the scalar as elements of GF(3329)[X]/(X^2
 // - 17^(2*bitreverse(i)+1)) The value of 17^(2*bitreverse(i)+1) mod 3329 is
 // stored in the precomputed |kModRoots| table. Note that our Barrett transform
-// only allows us to multipy two reduced numbers together, so we need some
+// only allows us to multiply two reduced numbers together, so we need some
 // intermediate reduction steps, even if an uint64_t could hold 3 multiplied
 // numbers.
 static void scalar_mult(scalar *out, const scalar *lhs, const scalar *rhs) {
@@ -336,7 +335,7 @@ static void scalar_from_keccak_vartime(scalar *out,
 static void scalar_centered_binomial_distribution_eta_2_with_prf(
     scalar *out, const uint8_t input[33]) {
   uint8_t entropy[128];
-  static_assert(sizeof(entropy) == 2 * /*kEta=*/2 * DEGREE / 8, "");
+  static_assert(sizeof(entropy) == 2 * /*kEta=*/2 * DEGREE / 8);
   prf(entropy, sizeof(entropy), input);
 
   for (int i = 0; i < DEGREE; i += 2) {
@@ -615,8 +614,9 @@ static struct private_key *private_key_from_external(
 
 // Calls |KYBER_generate_key_external_entropy| with random bytes from
 // |RAND_bytes|.
-void KYBER_generate_key(uint8_t out_encoded_public_key[KYBER_PUBLIC_KEY_BYTES],
-                        struct KYBER_private_key *out_private_key) {
+void bssl::KYBER_generate_key(
+    uint8_t out_encoded_public_key[KYBER_PUBLIC_KEY_BYTES],
+    struct KYBER_private_key *out_private_key) {
   uint8_t entropy[KYBER_GENERATE_KEY_ENTROPY];
   RAND_bytes(entropy, sizeof(entropy));
   CONSTTIME_SECRET(entropy, sizeof(entropy));
@@ -639,7 +639,7 @@ static int kyber_marshal_public_key(CBB *out, const struct public_key *pub) {
 // Algorithms 4 and 7 of the Kyber spec. Algorithms are combined since key
 // generation is not part of the FO transform, and the spec uses Algorithm 7 to
 // specify the actual key format.
-void KYBER_generate_key_external_entropy(
+void bssl::KYBER_generate_key_external_entropy(
     uint8_t out_encoded_public_key[KYBER_PUBLIC_KEY_BYTES],
     struct KYBER_private_key *out_private_key,
     const uint8_t entropy[KYBER_GENERATE_KEY_ENTROPY]) {
@@ -674,8 +674,9 @@ void KYBER_generate_key_external_entropy(
   OPENSSL_memcpy(priv->fo_failure_secret, entropy + 32, 32);
 }
 
-void KYBER_public_from_private(struct KYBER_public_key *out_public_key,
-                               const struct KYBER_private_key *private_key) {
+void bssl::KYBER_public_from_private(
+    struct KYBER_public_key *out_public_key,
+    const struct KYBER_private_key *private_key) {
   struct public_key *const pub = public_key_from_external(out_public_key);
   const struct private_key *const priv = private_key_from_external(private_key);
   *pub = priv->pub;
@@ -718,9 +719,9 @@ static void encrypt_cpa(uint8_t out[KYBER_CIPHERTEXT_BYTES],
 }
 
 // Calls KYBER_encap_external_entropy| with random bytes from |RAND_bytes|
-void KYBER_encap(uint8_t out_ciphertext[KYBER_CIPHERTEXT_BYTES],
-                 uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
-                 const struct KYBER_public_key *public_key) {
+void bssl::KYBER_encap(uint8_t out_ciphertext[KYBER_CIPHERTEXT_BYTES],
+                       uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
+                       const struct KYBER_public_key *public_key) {
   uint8_t entropy[KYBER_ENCAP_ENTROPY];
   RAND_bytes(entropy, KYBER_ENCAP_ENTROPY);
   CONSTTIME_SECRET(entropy, KYBER_ENCAP_ENTROPY);
@@ -734,7 +735,7 @@ void KYBER_encap(uint8_t out_ciphertext[KYBER_CIPHERTEXT_BYTES],
 // this when a secure random number generator is used. When an insecure random
 // number generator is used, the caller should switch to a secure one before
 // calling this method.
-void KYBER_encap_external_entropy(
+void bssl::KYBER_encap_external_entropy(
     uint8_t out_ciphertext[KYBER_CIPHERTEXT_BYTES],
     uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
     const struct KYBER_public_key *public_key,
@@ -777,9 +778,9 @@ static void decrypt_cpa(uint8_t out[32], const struct private_key *priv,
 // failure to be passed on to the caller, and instead returns a result that is
 // deterministic but unpredictable to anyone without knowledge of the private
 // key.
-void KYBER_decap(uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
-                 const uint8_t ciphertext[KYBER_CIPHERTEXT_BYTES],
-                 const struct KYBER_private_key *private_key) {
+void bssl::KYBER_decap(uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
+                       const uint8_t ciphertext[KYBER_CIPHERTEXT_BYTES],
+                       const struct KYBER_private_key *private_key) {
   const struct private_key *priv = private_key_from_external(private_key);
   uint8_t decrypted[64];
   decrypt_cpa(decrypted, priv, ciphertext);
@@ -803,8 +804,8 @@ void KYBER_decap(uint8_t out_shared_secret[KYBER_SHARED_SECRET_BYTES],
   kdf(out_shared_secret, KYBER_SHARED_SECRET_BYTES, input, sizeof(input));
 }
 
-int KYBER_marshal_public_key(CBB *out,
-                             const struct KYBER_public_key *public_key) {
+int bssl::KYBER_marshal_public_key(CBB *out,
+                                   const struct KYBER_public_key *public_key) {
   return kyber_marshal_public_key(out, public_key_from_external(public_key));
 }
 
@@ -821,7 +822,7 @@ static int kyber_parse_public_key_no_hash(struct public_key *pub, CBS *in) {
   return 1;
 }
 
-int KYBER_parse_public_key(struct KYBER_public_key *public_key, CBS *in) {
+int bssl::KYBER_parse_public_key(struct KYBER_public_key *public_key, CBS *in) {
   struct public_key *pub = public_key_from_external(public_key);
   CBS orig_in = *in;
   if (!kyber_parse_public_key_no_hash(pub, in) ||  //
@@ -832,8 +833,8 @@ int KYBER_parse_public_key(struct KYBER_public_key *public_key, CBS *in) {
   return 1;
 }
 
-int KYBER_marshal_private_key(CBB *out,
-                              const struct KYBER_private_key *private_key) {
+int bssl::KYBER_marshal_private_key(
+    CBB *out, const struct KYBER_private_key *private_key) {
   const struct private_key *const priv = private_key_from_external(private_key);
   uint8_t *s_output;
   if (!CBB_add_space(out, &s_output, kEncodedVectorSize)) {
@@ -850,8 +851,8 @@ int KYBER_marshal_private_key(CBB *out,
   return 1;
 }
 
-int KYBER_parse_private_key(struct KYBER_private_key *out_private_key,
-                            CBS *in) {
+int bssl::KYBER_parse_private_key(struct KYBER_private_key *out_private_key,
+                                  CBS *in) {
   struct private_key *const priv = private_key_from_external(out_private_key);
 
   CBS s_bytes;

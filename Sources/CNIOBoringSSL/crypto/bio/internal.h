@@ -1,16 +1,26 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#ifndef OPENSSL_HEADER_BIO_INTERNAL_H
-#define OPENSSL_HEADER_BIO_INTERNAL_H
+#ifndef OPENSSL_HEADER_CRYPTO_BIO_INTERNAL_H
+#define OPENSSL_HEADER_CRYPTO_BIO_INTERNAL_H
 
-#include <CNIOBoringSSL_base.h>
+#include <CNIOBoringSSL_bio.h>
+
+#include <CNIOBoringSSL_ex_data.h>
+
+#include "../internal.h"
+#include "../mem_internal.h"
 
 #if !defined(OPENSSL_NO_SOCK)
 #if !defined(OPENSSL_WINDOWS)
@@ -21,17 +31,60 @@ typedef unsigned short u_short;
 #include <sys/types.h>
 #include <sys/socket.h>
 #else
-OPENSSL_MSVC_PRAGMA(warning(push, 3))
 #include <winsock2.h>
-OPENSSL_MSVC_PRAGMA(warning(pop))
 typedef int socklen_t;
 #endif
 #endif  // !OPENSSL_NO_SOCK
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
 
+DECLARE_OPAQUE_STRUCT(bio_st, Bio)
+
+struct bio_method_st {
+  int type;
+  const char *name;
+  int (*bwrite)(BIO *, const char *, int);
+  int (*bread)(BIO *, char *, int);
+  int (*bgets)(BIO *, char *, int);
+  long (*ctrl)(BIO *, int, long, void *);
+  int (*create)(BIO *);
+  int (*destroy)(BIO *);
+  long (*callback_ctrl)(BIO *, int, BIO_info_cb *);
+};
+
+BSSL_NAMESPACE_BEGIN
+
+class Bio : public bio_st, public RefCounted<Bio> {
+ public:
+  explicit Bio(const BIO_METHOD *m);
+
+  const BIO_METHOD *method;
+  CRYPTO_EX_DATA ex_data;
+
+  // TODO(crbug.com/412269080): |init| and |shutdown| could be bitfields, or
+  // integrated into |flags|, to save memory.
+
+  // init is non-zero if this |BIO| has been initialised.
+  int init = 0;
+  // shutdown is often used by specific |BIO_METHOD|s to determine whether
+  // they own some underlying resource. This flag can often be controlled by
+  // |BIO_set_close|. For example, whether an fd BIO closes the underlying fd
+  // when it, itself, is closed.
+  int shutdown = 1;
+  int flags = 0;
+  int retry_reason = 0;
+  // num is a BIO-specific value. For example, in fd BIOs it's used to store a
+  // file descriptor.
+  int num = 0;
+  void *ptr = nullptr;
+  // next_bio points to the next |BIO| in a chain. This |BIO| owns a reference
+  // to |next_bio|.
+  Bio *next_bio = nullptr;  // used by filter BIOs
+  uint64_t num_read = 0, num_write = 0;
+
+ private:
+  friend RefCounted;
+  ~Bio();
+};
 
 #if !defined(OPENSSL_NO_SOCK)
 
@@ -51,7 +104,7 @@ int bio_socket_nbio(int sock, int on);
 // bio_clear_socket_error clears the last system socket error.
 //
 // TODO(fork): remove all callers of this.
-void bio_clear_socket_error(void);
+void bio_clear_socket_error();
 
 // bio_sock_error returns the last socket error on |sock|.
 int bio_sock_error(int sock);
@@ -66,9 +119,7 @@ int bio_socket_should_retry(int return_value);
 // and |errno| indicates that it's non-fatal.
 int bio_errno_should_retry(int return_value);
 
+BSSL_NAMESPACE_END
 
-#if defined(__cplusplus)
-}  // extern C
-#endif
 
-#endif  // OPENSSL_HEADER_BIO_INTERNAL_H
+#endif  // OPENSSL_HEADER_CRYPTO_BIO_INTERNAL_H

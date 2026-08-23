@@ -1,16 +1,16 @@
-/* Copyright 2014 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_bytestring.h>
 
@@ -22,13 +22,16 @@
 #include <CNIOBoringSSL_mem.h>
 
 #include "../internal.h"
+#include "internal.h"
 
+
+using namespace bssl;
 
 void CBB_zero(CBB *cbb) { OPENSSL_memset(cbb, 0, sizeof(CBB)); }
 
 static void cbb_init(CBB *cbb, uint8_t *buf, size_t cap, int can_resize) {
   cbb->is_child = 0;
-  cbb->child = NULL;
+  cbb->child = nullptr;
   cbb->u.base.buf = buf;
   cbb->u.base.len = 0;
   cbb->u.base.cap = cap;
@@ -40,7 +43,7 @@ int CBB_init(CBB *cbb, size_t initial_capacity) {
   CBB_zero(cbb);
 
   uint8_t *buf = reinterpret_cast<uint8_t *>(OPENSSL_malloc(initial_capacity));
-  if (initial_capacity > 0 && buf == NULL) {
+  if (initial_capacity > 0 && buf == nullptr) {
     return 0;
   }
 
@@ -69,7 +72,7 @@ void CBB_cleanup(CBB *cbb) {
 
 static int cbb_buffer_reserve(struct cbb_buffer_st *base, uint8_t **out,
                               size_t len) {
-  if (base == NULL) {
+  if (base == nullptr) {
     return 0;
   }
 
@@ -92,7 +95,7 @@ static int cbb_buffer_reserve(struct cbb_buffer_st *base, uint8_t **out,
     }
     uint8_t *newbuf =
         reinterpret_cast<uint8_t *>(OPENSSL_realloc(base->buf, newcap));
-    if (newbuf == NULL) {
+    if (newbuf == nullptr) {
       goto err;
     }
 
@@ -131,18 +134,18 @@ int CBB_finish(CBB *cbb, uint8_t **out_data, size_t *out_len) {
     return 0;
   }
 
-  if (cbb->u.base.can_resize && (out_data == NULL || out_len == NULL)) {
+  if (cbb->u.base.can_resize && (out_data == nullptr || out_len == nullptr)) {
     // |out_data| and |out_len| can only be NULL if the CBB is fixed.
     return 0;
   }
 
-  if (out_data != NULL) {
+  if (out_data != nullptr) {
     *out_data = cbb->u.base.buf;
   }
-  if (out_len != NULL) {
+  if (out_len != nullptr) {
     *out_len = cbb->u.base.len;
   }
-  cbb->u.base.buf = NULL;
+  cbb->u.base.buf = nullptr;
   CBB_cleanup(cbb);
   return 1;
 }
@@ -174,7 +177,7 @@ static void cbb_on_error(CBB *cbb) {
   // Clearing the pointer is not strictly necessary, but GCC's dangling pointer
   // warning does not know |cbb->child| will not be read once |error| is set
   // above.
-  cbb->child = NULL;
+  cbb->child = nullptr;
 }
 
 // CBB_flush recurses and then writes out any pending length prefix. The
@@ -185,11 +188,11 @@ int CBB_flush(CBB *cbb) {
   // fail all following calls. In particular, |cbb->child| may point to invalid
   // memory.
   struct cbb_buffer_st *base = cbb_get_base(cbb);
-  if (base == NULL || base->error) {
+  if (base == nullptr || base->error) {
     return 0;
   }
 
-  if (cbb->child == NULL) {
+  if (cbb->child == nullptr) {
     // Nothing to flush.
     return 1;
   }
@@ -241,7 +244,7 @@ int CBB_flush(CBB *cbb) {
     if (len_len != 1) {
       // We need to move the contents along in order to make space.
       size_t extra_bytes = len_len - 1;
-      if (!cbb_buffer_add(base, NULL, extra_bytes)) {
+      if (!cbb_buffer_add(base, nullptr, extra_bytes)) {
         goto err;
       }
       OPENSSL_memmove(base->buf + child_start + extra_bytes,
@@ -260,8 +263,8 @@ int CBB_flush(CBB *cbb) {
     goto err;
   }
 
-  child->base = NULL;
-  cbb->child = NULL;
+  child->base = nullptr;
+  cbb->child = nullptr;
 
   return 1;
 
@@ -270,8 +273,8 @@ err:
   return 0;
 }
 
-const uint8_t *CBB_data(const CBB *cbb) {
-  assert(cbb->child == NULL);
+uint8_t *CBB_data(const CBB *cbb) {
+  assert(cbb->child == nullptr);
   if (cbb->is_child) {
     return cbb->u.child.base->buf + cbb->u.child.offset +
            cbb->u.child.pending_len_len;
@@ -280,7 +283,7 @@ const uint8_t *CBB_data(const CBB *cbb) {
 }
 
 size_t CBB_len(const CBB *cbb) {
-  assert(cbb->child == NULL);
+  assert(cbb->child == nullptr);
   if (cbb->is_child) {
     assert(cbb->u.child.offset + cbb->u.child.pending_len_len <=
            cbb->u.child.base->len);
@@ -292,7 +295,7 @@ size_t CBB_len(const CBB *cbb) {
 
 static int cbb_add_child(CBB *cbb, CBB *out_child, uint8_t len_len,
                          int is_asn1) {
-  assert(cbb->child == NULL);
+  assert(cbb->child == nullptr);
   assert(!is_asn1 || len_len == 1);
   struct cbb_buffer_st *base = cbb_get_base(cbb);
   size_t offset = base->len;
@@ -419,7 +422,7 @@ int CBB_reserve(CBB *cbb, uint8_t **out_data, size_t len) {
 int CBB_did_write(CBB *cbb, size_t len) {
   struct cbb_buffer_st *base = cbb_get_base(cbb);
   size_t newlen = base->len + len;
-  if (cbb->child != NULL || newlen < base->len || newlen > base->cap) {
+  if (cbb->child != nullptr || newlen < base->len || newlen > base->cap) {
     return 0;
   }
   base->len = newlen;
@@ -468,8 +471,15 @@ int CBB_add_u64le(CBB *cbb, uint64_t value) {
   return CBB_add_u64(cbb, CRYPTO_bswap8(value));
 }
 
+void CBB_discard(CBB *cbb, size_t len) {
+  BSSL_CHECK(cbb->child == nullptr);
+  BSSL_CHECK(len <= CBB_len(cbb));
+  struct cbb_buffer_st *base = cbb_get_base(cbb);
+  base->len -= len;
+}
+
 void CBB_discard_child(CBB *cbb) {
-  if (cbb->child == NULL) {
+  if (cbb->child == nullptr) {
     return;
   }
 
@@ -477,8 +487,21 @@ void CBB_discard_child(CBB *cbb) {
   assert(cbb->child->is_child);
   base->len = cbb->child->u.child.offset;
 
-  cbb->child->u.child.base = NULL;
-  cbb->child = NULL;
+  cbb->child->u.child.base = nullptr;
+  cbb->child = nullptr;
+}
+
+int CBB_add_asn1_element(CBB *cbb, CBS_ASN1_TAG tag, const uint8_t *data,
+                         size_t data_len) {
+  CBB child;
+  if (!CBB_add_asn1(cbb, &child, tag) ||
+      !CBB_add_bytes(&child, data, data_len) ||  //
+      !CBB_flush(cbb)) {
+    cbb_on_error(cbb);
+    return 0;
+  }
+
+  return 1;
 }
 
 int CBB_add_asn1_uint64(CBB *cbb, uint64_t value) {
@@ -557,14 +580,7 @@ err:
 }
 
 int CBB_add_asn1_octet_string(CBB *cbb, const uint8_t *data, size_t data_len) {
-  CBB child;
-  if (!CBB_add_asn1(cbb, &child, CBS_ASN1_OCTETSTRING) ||
-      !CBB_add_bytes(&child, data, data_len) || !CBB_flush(cbb)) {
-    cbb_on_error(cbb);
-    return 0;
-  }
-
-  return 1;
+  return CBB_add_asn1_element(cbb, CBS_ASN1_OCTETSTRING, data, data_len);
 }
 
 int CBB_add_asn1_bool(CBB *cbb, int value) {
@@ -625,6 +641,38 @@ int CBB_add_asn1_oid_from_text(CBB *cbb, const char *text, size_t len) {
   return 1;
 }
 
+int CBB_add_asn1_relative_oid_from_text(CBB *cbb, const char *text,
+                                        size_t len) {
+  if (!CBB_flush(cbb)) {
+    return 0;
+  }
+
+  // Relative OIDs must have at least one component.
+  if (!len) {
+    return 0;
+  }
+
+  CBS cbs;
+  CBS_init(&cbs, reinterpret_cast<const uint8_t *>(text), len);
+
+  while (CBS_len(&cbs) > 0) {
+    uint64_t a;
+    if (!parse_dotted_decimal(&cbs, &a) || !add_base128_integer(cbb, a)) {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+int CBB_add_asn1_oid_component(CBB *cbb, uint64_t value) {
+  if (!CBB_flush(cbb)) {
+    return 0;
+  }
+
+  return add_base128_integer(cbb, value);
+}
+
 static int compare_set_of_element(const void *a_ptr, const void *b_ptr) {
   // See X.690, section 11.6 for the ordering. They are sorted in ascending
   // order by their DER encoding.
@@ -653,7 +701,7 @@ int CBB_flush_asn1_set_of(CBB *cbb) {
   size_t num_children = 0;
   CBS_init(&cbs, CBB_data(cbb), CBB_len(cbb));
   while (CBS_len(&cbs) != 0) {
-    if (!CBS_get_any_asn1_element(&cbs, NULL, NULL, NULL)) {
+    if (!CBS_get_any_asn1_element(&cbs, nullptr, nullptr, nullptr)) {
       OPENSSL_PUT_ERROR(CRYPTO, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
       return 0;
     }
@@ -674,12 +722,12 @@ int CBB_flush_asn1_set_of(CBB *cbb) {
       reinterpret_cast<CBS *>(OPENSSL_calloc(num_children, sizeof(CBS)));
   uint8_t *out;
   size_t offset = 0;
-  if (buf == NULL || children == NULL) {
+  if (buf == nullptr || children == nullptr) {
     goto err;
   }
   CBS_init(&cbs, buf, buf_len);
   for (size_t i = 0; i < num_children; i++) {
-    if (!CBS_get_any_asn1_element(&cbs, &children[i], NULL, NULL)) {
+    if (!CBS_get_any_asn1_element(&cbs, &children[i], nullptr, nullptr)) {
       goto err;
     }
   }
@@ -699,4 +747,15 @@ err:
   OPENSSL_free(buf);
   OPENSSL_free(children);
   return ret;
+}
+
+bool bssl::CBBFinishArray(CBB *cbb, Array<uint8_t> *out) {
+  uint8_t *ptr;
+  size_t len;
+  if (!CBB_finish(cbb, &ptr, &len)) {
+    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
+    return false;
+  }
+  out->Reset(ptr, len);
+  return true;
 }

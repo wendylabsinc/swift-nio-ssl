@@ -1,16 +1,16 @@
-/* Copyright 2020 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2020 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_hpke.h>
 
@@ -26,18 +26,25 @@
 #include <CNIOBoringSSL_evp_errors.h>
 #include <CNIOBoringSSL_hkdf.h>
 #include <CNIOBoringSSL_mem.h>
+#include <CNIOBoringSSL_mlkem.h>
 #include <CNIOBoringSSL_rand.h>
-#include <CNIOBoringSSL_sha.h>
+#include <CNIOBoringSSL_sha2.h>
+#include <CNIOBoringSSL_xwing.h>
 
+#include "../fipsmodule/bcm_interface.h"
 #include "../fipsmodule/ec/internal.h"
 #include "../internal.h"
+#include "../mem_internal.h"
 
+
+using namespace bssl;
 
 // This file implements RFC 9180.
 
-#define MAX_SEED_LEN X25519_PRIVATE_KEY_LEN
+#define MAX_SEED_LEN XWING_SEED_LEN
 #define MAX_SHARED_SECRET_LEN SHA256_DIGEST_LENGTH
 
+// TODO(chlily): Fold this into `EVP_KEM`.
 struct evp_hpke_kem_st {
   uint16_t id;
   size_t public_key_len;
@@ -72,12 +79,12 @@ struct evp_hpke_kem_st {
 struct evp_hpke_kdf_st {
   uint16_t id;
   // We only support HKDF-based KDFs.
-  const EVP_MD *(*hkdf_md_func)(void);
+  const EVP_MD *(*hkdf_md_func)();
 };
 
 struct evp_hpke_aead_st {
   uint16_t id;
-  const EVP_AEAD *(*aead_func)(void);
+  const EVP_AEAD *(*aead_func)();
 };
 
 
@@ -141,7 +148,7 @@ static int dhkem_extract_and_expand(uint16_t kem_id, const EVP_MD *hkdf_md,
                          static_cast<uint8_t>(kem_id & 0xff)};
   uint8_t prk[EVP_MAX_MD_SIZE];
   size_t prk_len;
-  return hpke_labeled_extract(hkdf_md, prk, &prk_len, NULL, 0, suite_id,
+  return hpke_labeled_extract(hkdf_md, prk, &prk_len, nullptr, 0, suite_id,
                               sizeof(suite_id), "eae_prk", dh, dh_len) &&
          hpke_labeled_expand(hkdf_md, out_key, out_len, prk, prk_len, suite_id,
                              sizeof(suite_id), "shared_secret", kem_context,
@@ -296,7 +303,7 @@ static int x25519_auth_decap(const EVP_HPKE_KEY *key,
   return 1;
 }
 
-const EVP_HPKE_KEM *EVP_hpke_x25519_hkdf_sha256(void) {
+const EVP_HPKE_KEM *EVP_hpke_x25519_hkdf_sha256() {
   static const EVP_HPKE_KEM kKEM = {
       /*id=*/EVP_HPKE_DHKEM_X25519_HKDF_SHA256,
       /*public_key_len=*/X25519_PUBLIC_VALUE_LEN,
@@ -370,7 +377,7 @@ static int p256_private_key_from_seed(uint8_t out_priv[P256_PRIVATE_KEY_LEN],
 
   uint8_t dkp_prk[32];
   size_t dkp_prk_len;
-  if (!hpke_labeled_extract(EVP_sha256(), dkp_prk, &dkp_prk_len, NULL, 0,
+  if (!hpke_labeled_extract(EVP_sha256(), dkp_prk, &dkp_prk_len, nullptr, 0,
                             suite_id, sizeof(suite_id), "dkp_prk", seed,
                             P256_SEED_LEN)) {
     return 0;
@@ -584,7 +591,7 @@ static int p256_auth_decap(const EVP_HPKE_KEY *key, uint8_t *out_shared_secret,
   return 1;
 }
 
-const EVP_HPKE_KEM *EVP_hpke_p256_hkdf_sha256(void) {
+const EVP_HPKE_KEM *EVP_hpke_p256_hkdf_sha256() {
   static const EVP_HPKE_KEM kKEM = {
       /*id=*/EVP_HPKE_DHKEM_P256_HKDF_SHA256,
       /*public_key_len=*/P256_PUBLIC_KEY_LEN,
@@ -600,6 +607,276 @@ const EVP_HPKE_KEM *EVP_hpke_p256_hkdf_sha256(void) {
   };
   return &kKEM;
 }
+
+#define XWING_PRIVATE_KEY_LEN XWING_PRIVATE_KEY_BYTES
+#define XWING_PUBLIC_KEY_LEN XWING_PUBLIC_KEY_BYTES
+#define XWING_PUBLIC_VALUE_LEN XWING_CIPHERTEXT_BYTES
+#define XWING_SEED_LEN 64
+#define XWING_SHARED_KEY_LEN XWING_SHARED_SECRET_BYTES
+
+static int xwing_init_key(EVP_HPKE_KEY *key, const uint8_t *priv_key,
+                          size_t priv_key_len) {
+  CBS cbs;
+  CBS_init(&cbs, priv_key, priv_key_len);
+  XWING_private_key private_key;
+  if (!XWING_parse_private_key(&private_key, &cbs) || CBS_len(&cbs) != 0) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+    return 0;
+  }
+
+  if (!XWING_public_from_private(key->public_key, &private_key)) {
+    return 0;
+  }
+
+  if (priv_key_len > sizeof(key->private_key)) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+    return 0;
+  }
+  OPENSSL_memcpy(key->private_key, priv_key, priv_key_len);
+  return 1;
+}
+
+static int xwing_generate_key(EVP_HPKE_KEY *key) {
+  XWING_private_key private_key;
+  if (!XWING_generate_key(key->public_key, &private_key)) {
+    return 0;
+  }
+
+  CBB cbb;
+  CBB_init_fixed(&cbb, key->private_key, XWING_PRIVATE_KEY_LEN);
+  if (!XWING_marshal_private_key(&cbb, &private_key) ||
+      CBB_len(&cbb) != XWING_PRIVATE_KEY_LEN) {
+    return 0;
+  }
+
+  return 1;
+}
+
+static int xwing_encap_with_seed(const EVP_HPKE_KEM *kem,
+                                 uint8_t *out_shared_secret,
+                                 size_t *out_shared_secret_len,
+                                 uint8_t *out_enc, size_t *out_enc_len,
+                                 size_t max_enc, const uint8_t *peer_public_key,
+                                 size_t peer_public_key_len,
+                                 const uint8_t *seed, size_t seed_len) {
+  if (max_enc < XWING_PUBLIC_VALUE_LEN) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_INVALID_BUFFER_SIZE);
+    return 0;
+  }
+  if (peer_public_key_len != XWING_PUBLIC_KEY_LEN ||
+      seed_len != XWING_SEED_LEN) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+    return 0;
+  }
+
+  if (!XWING_encap_external_entropy(out_enc, out_shared_secret, peer_public_key,
+                                    seed)) {
+    OPENSSL_PUT_ERROR(EVP, ERR_R_INTERNAL_ERROR);
+    return 0;
+  }
+
+  *out_enc_len = XWING_PUBLIC_VALUE_LEN;
+  *out_shared_secret_len = XWING_SHARED_KEY_LEN;
+  return 1;
+}
+
+static int xwing_decap(const EVP_HPKE_KEY *key, uint8_t *out_shared_secret,
+                       size_t *out_shared_secret_len, const uint8_t *enc,
+                       size_t enc_len) {
+  if (enc_len != XWING_PUBLIC_VALUE_LEN) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+    return 0;
+  }
+
+  CBS cbs;
+  CBS_init(&cbs, key->private_key, XWING_PRIVATE_KEY_LEN);
+  XWING_private_key private_key;
+  if (!XWING_parse_private_key(&private_key, &cbs)) {
+    OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+    return 0;
+  }
+
+  if (!XWING_decap(out_shared_secret, enc, &private_key)) {
+    OPENSSL_PUT_ERROR(EVP, ERR_R_INTERNAL_ERROR);
+    return 0;
+  }
+
+  *out_shared_secret_len = XWING_SHARED_KEY_LEN;
+  return 1;
+}
+
+const EVP_HPKE_KEM *EVP_hpke_xwing() {
+  static const EVP_HPKE_KEM kKEM = {
+      /*id=*/EVP_HPKE_XWING,
+      /*public_key_len=*/XWING_PUBLIC_KEY_LEN,
+      /*private_key_len=*/XWING_PRIVATE_KEY_LEN,
+      /*seed_len=*/XWING_SEED_LEN,
+      /*enc_len=*/XWING_PUBLIC_VALUE_LEN,
+      xwing_init_key,
+      xwing_generate_key,
+      xwing_encap_with_seed,
+      xwing_decap,
+      // X-Wing doesn't support authenticated encapsulation/decapsulation:
+      // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem-08#name-use-in-hpke
+      /* auth_encap_with_seed= */ nullptr,
+      /* auth_decap= */ nullptr,
+  };
+  return &kKEM;
+}
+
+namespace {
+
+template <uint16_t KEM_ID, size_t PUBLIC_KEY_BYTES, size_t CIPHERTEXT_BYTES,
+          size_t ENCAP_ENTROPY_BYTES,
+
+          typename PrivateKey, typename PublicKey,
+
+          int (*PrivateKeyFromSeed)(PrivateKey *, const uint8_t *, size_t),
+          void (*PublicFromPrivate)(PublicKey *, const PrivateKey *),
+          int (*MarshalPublicKey)(CBB *, const PublicKey *),
+          void (*GenerateKey)(uint8_t *, uint8_t *, PrivateKey *),
+          int (*ParsePublicKey)(PublicKey *, CBS *),
+          bcm_infallible (*BCMEncapExternalEntropy)(
+              uint8_t *, uint8_t *, const PublicKey *, const uint8_t *),
+          int (*Decap)(uint8_t *, const uint8_t *, size_t, const PrivateKey *)>
+struct MLKEMHPKE {
+  // These sizes are common across both ML-KEM-768 and ML-KEM-1024.
+  static constexpr size_t PRIVATE_KEY_LEN = MLKEM_SEED_BYTES;
+  static constexpr size_t SHARED_KEY_LEN = MLKEM_SHARED_SECRET_BYTES;
+
+  static constexpr uint16_t ID = KEM_ID;
+  static constexpr size_t PUBLIC_KEY_LEN = PUBLIC_KEY_BYTES;
+  static constexpr size_t SEED_LEN = ENCAP_ENTROPY_BYTES;
+  static constexpr size_t ENC_LEN = CIPHERTEXT_BYTES;
+
+  static int InitKey(EVP_HPKE_KEY *key, const uint8_t *priv_key,
+                     size_t priv_key_len) {
+    PrivateKey expanded_private_key;
+    if (!PrivateKeyFromSeed(&expanded_private_key, priv_key, priv_key_len)) {
+      OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+      return 0;
+    }
+    PublicKey public_key;
+    PublicFromPrivate(&public_key, &expanded_private_key);
+    CBB cbb;
+    static_assert(sizeof(key->public_key) >= PUBLIC_KEY_BYTES,
+                  "EVP_HPKE_KEY public_key is too small for ML-KEM.");
+    if (!CBB_init_fixed(&cbb, key->public_key, PUBLIC_KEY_BYTES) ||
+        !MarshalPublicKey(&cbb, &public_key)) {
+      return 0;
+    }
+
+    static_assert(sizeof(key->private_key) >= PRIVATE_KEY_LEN,
+                  "EVP_HPKE_KEY private_key is too small for ML-KEM");
+    OPENSSL_memcpy(key->private_key, priv_key, priv_key_len);
+    return 1;
+  }
+
+  static int HpkeGenerateKey(EVP_HPKE_KEY *key) {
+    static_assert(sizeof(key->public_key) >= PUBLIC_KEY_BYTES,
+                  "EVP_HPKE_KEY public_key is too small for ML-KEM.");
+    static_assert(sizeof(key->private_key) >= PRIVATE_KEY_LEN,
+                  "EVP_HPKE_KEY private_key is too small for ML-KEM");
+    PrivateKey expanded_private_key;
+    GenerateKey(key->public_key, key->private_key, &expanded_private_key);
+
+    return 1;
+  }
+
+  static int EncapWithSeed(const EVP_HPKE_KEM *kem, uint8_t *out_shared_secret,
+                           size_t *out_shared_secret_len, uint8_t *out_enc,
+                           size_t *out_enc_len, size_t max_enc,
+                           const uint8_t *peer_public_key,
+                           size_t peer_public_key_len, const uint8_t *seed,
+                           size_t seed_len) {
+    if (max_enc < CIPHERTEXT_BYTES) {
+      OPENSSL_PUT_ERROR(EVP, EVP_R_INVALID_BUFFER_SIZE);
+      return 0;
+    }
+    if (peer_public_key_len != PUBLIC_KEY_BYTES ||
+        seed_len != ENCAP_ENTROPY_BYTES) {
+      OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+      return 0;
+    }
+
+    CBS cbs;
+    CBS_init(&cbs, peer_public_key, peer_public_key_len);
+    PublicKey public_key;
+    if (!ParsePublicKey(&public_key, &cbs)) {
+      OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+      return 0;
+    }
+    // The public ML-KEM interface doesn't support providing the encap entropy
+    // so the BCM function is used here.
+    BCMEncapExternalEntropy(out_enc, out_shared_secret, &public_key, seed);
+
+    *out_enc_len = CIPHERTEXT_BYTES;
+    *out_shared_secret_len = SHARED_KEY_LEN;
+    return 1;
+  }
+
+  static int HpkeDecap(const EVP_HPKE_KEY *key, uint8_t *out_shared_secret,
+                       size_t *out_shared_secret_len, const uint8_t *enc,
+                       size_t enc_len) {
+    PrivateKey private_key;
+    if (!PrivateKeyFromSeed(&private_key, key->private_key, PRIVATE_KEY_LEN)) {
+      OPENSSL_PUT_ERROR(EVP, EVP_R_DECODE_ERROR);
+      return 0;
+    }
+
+    if (!Decap(out_shared_secret, enc, enc_len, &private_key)) {
+      OPENSSL_PUT_ERROR(EVP, ERR_R_INTERNAL_ERROR);
+      return 0;
+    }
+
+    *out_shared_secret_len = SHARED_KEY_LEN;
+    return 1;
+  }
+};
+
+using MLKEM768HPKE =
+    MLKEMHPKE<EVP_HPKE_MLKEM768, MLKEM768_PUBLIC_KEY_BYTES,
+              MLKEM768_CIPHERTEXT_BYTES, BCM_MLKEM_ENCAP_ENTROPY,
+
+              MLKEM768_private_key, MLKEM768_public_key,
+
+              MLKEM768_private_key_from_seed, MLKEM768_public_from_private,
+              MLKEM768_marshal_public_key, MLKEM768_generate_key,
+              MLKEM768_parse_public_key, BCM_mlkem768_encap_external_entropy,
+              MLKEM768_decap>;
+
+using MLKEM1024HPKE =
+    MLKEMHPKE<EVP_HPKE_MLKEM1024, MLKEM1024_PUBLIC_KEY_BYTES,
+              MLKEM1024_CIPHERTEXT_BYTES, BCM_MLKEM_ENCAP_ENTROPY,
+
+              MLKEM1024_private_key, MLKEM1024_public_key,
+
+              MLKEM1024_private_key_from_seed, MLKEM1024_public_from_private,
+              MLKEM1024_marshal_public_key, MLKEM1024_generate_key,
+              MLKEM1024_parse_public_key, BCM_mlkem1024_encap_external_entropy,
+              MLKEM1024_decap>;
+
+template <typename MLKEM>
+static const EVP_HPKE_KEM kMLKEM = {
+    /*id=*/MLKEM::ID,
+    /*public_key_len=*/MLKEM::PUBLIC_KEY_LEN,
+    /*private_key_len=*/MLKEM::PRIVATE_KEY_LEN,
+    /*seed_len=*/MLKEM::SEED_LEN,
+    /*enc_len=*/MLKEM::ENC_LEN,
+    MLKEM::InitKey,
+    MLKEM::HpkeGenerateKey,
+    MLKEM::EncapWithSeed,
+    MLKEM::HpkeDecap,
+    // ML-KEM doesn't support authenticated encapsulation/decapsulation:
+    // https://datatracker.ietf.org/doc/draft-ietf-hpke-pq/01/
+    /*auth_encap_with_seed=*/nullptr,
+    /*auth_decap=*/nullptr,
+};
+
+}  // namespace
+
+const EVP_HPKE_KEM *EVP_hpke_mlkem768() { return &kMLKEM<MLKEM768HPKE>; }
+const EVP_HPKE_KEM *EVP_hpke_mlkem1024() { return &kMLKEM<MLKEM1024HPKE>; }
 
 uint16_t EVP_HPKE_KEM_id(const EVP_HPKE_KEM *kem) { return kem->id; }
 
@@ -622,20 +899,19 @@ void EVP_HPKE_KEY_cleanup(EVP_HPKE_KEY *key) {
   // future.
 }
 
-EVP_HPKE_KEY *EVP_HPKE_KEY_new(void) {
-  EVP_HPKE_KEY *key =
-      reinterpret_cast<EVP_HPKE_KEY *>(OPENSSL_malloc(sizeof(EVP_HPKE_KEY)));
-  if (key == NULL) {
-    return NULL;
+EVP_HPKE_KEY *EVP_HPKE_KEY_new() {
+  EVP_HPKE_KEY *key = New<EVP_HPKE_KEY>();
+  if (key == nullptr) {
+    return nullptr;
   }
   EVP_HPKE_KEY_zero(key);
   return key;
 }
 
 void EVP_HPKE_KEY_free(EVP_HPKE_KEY *key) {
-  if (key != NULL) {
+  if (key != nullptr) {
     EVP_HPKE_KEY_cleanup(key);
-    OPENSSL_free(key);
+    Delete(key);
   }
 }
 
@@ -659,7 +935,7 @@ int EVP_HPKE_KEY_init(EVP_HPKE_KEY *key, const EVP_HPKE_KEM *kem,
   EVP_HPKE_KEY_zero(key);
   key->kem = kem;
   if (!kem->init_key(key, priv_key, priv_key_len)) {
-    key->kem = NULL;
+    key->kem = nullptr;
     return 0;
   }
   return 1;
@@ -669,7 +945,7 @@ int EVP_HPKE_KEY_generate(EVP_HPKE_KEY *key, const EVP_HPKE_KEM *kem) {
   EVP_HPKE_KEY_zero(key);
   key->kem = kem;
   if (!kem->generate_key(key)) {
-    key->kem = NULL;
+    key->kem = nullptr;
     return 0;
   }
   return 1;
@@ -704,7 +980,7 @@ int EVP_HPKE_KEY_private_key(const EVP_HPKE_KEY *key, uint8_t *out,
 
 // Supported KDFs and AEADs.
 
-const EVP_HPKE_KDF *EVP_hpke_hkdf_sha256(void) {
+const EVP_HPKE_KDF *EVP_hpke_hkdf_sha256() {
   static const EVP_HPKE_KDF kKDF = {EVP_HPKE_HKDF_SHA256, &EVP_sha256};
   return &kKDF;
 }
@@ -715,19 +991,19 @@ const EVP_MD *EVP_HPKE_KDF_hkdf_md(const EVP_HPKE_KDF *kdf) {
   return kdf->hkdf_md_func();
 }
 
-const EVP_HPKE_AEAD *EVP_hpke_aes_128_gcm(void) {
+const EVP_HPKE_AEAD *EVP_hpke_aes_128_gcm() {
   static const EVP_HPKE_AEAD kAEAD = {EVP_HPKE_AES_128_GCM,
                                       &EVP_aead_aes_128_gcm};
   return &kAEAD;
 }
 
-const EVP_HPKE_AEAD *EVP_hpke_aes_256_gcm(void) {
+const EVP_HPKE_AEAD *EVP_hpke_aes_256_gcm() {
   static const EVP_HPKE_AEAD kAEAD = {EVP_HPKE_AES_256_GCM,
                                       &EVP_aead_aes_256_gcm};
   return &kAEAD;
 }
 
-const EVP_HPKE_AEAD *EVP_hpke_chacha20_poly1305(void) {
+const EVP_HPKE_AEAD *EVP_hpke_chacha20_poly1305() {
   static const EVP_HPKE_AEAD kAEAD = {EVP_HPKE_CHACHA20_POLY1305,
                                       &EVP_aead_chacha20_poly1305};
   return &kAEAD;
@@ -774,8 +1050,8 @@ static int hpke_key_schedule(EVP_HPKE_CTX *ctx, uint8_t mode,
   const EVP_MD *hkdf_md = ctx->kdf->hkdf_md_func();
   uint8_t psk_id_hash[EVP_MAX_MD_SIZE];
   size_t psk_id_hash_len;
-  if (!hpke_labeled_extract(hkdf_md, psk_id_hash, &psk_id_hash_len, NULL, 0,
-                            suite_id, sizeof(suite_id), "psk_id_hash", NULL,
+  if (!hpke_labeled_extract(hkdf_md, psk_id_hash, &psk_id_hash_len, nullptr, 0,
+                            suite_id, sizeof(suite_id), "psk_id_hash", nullptr,
                             0)) {
     return 0;
   }
@@ -783,7 +1059,7 @@ static int hpke_key_schedule(EVP_HPKE_CTX *ctx, uint8_t mode,
   // info_hash = LabeledExtract("", "info_hash", info)
   uint8_t info_hash[EVP_MAX_MD_SIZE];
   size_t info_hash_len;
-  if (!hpke_labeled_extract(hkdf_md, info_hash, &info_hash_len, NULL, 0,
+  if (!hpke_labeled_extract(hkdf_md, info_hash, &info_hash_len, nullptr, 0,
                             suite_id, sizeof(suite_id), "info_hash", info,
                             info_len)) {
     return 0;
@@ -797,7 +1073,7 @@ static int hpke_key_schedule(EVP_HPKE_CTX *ctx, uint8_t mode,
   if (!CBB_add_u8(&context_cbb, mode) ||
       !CBB_add_bytes(&context_cbb, psk_id_hash, psk_id_hash_len) ||
       !CBB_add_bytes(&context_cbb, info_hash, info_hash_len) ||
-      !CBB_finish(&context_cbb, NULL, &context_len)) {
+      !CBB_finish(&context_cbb, nullptr, &context_len)) {
     return 0;
   }
 
@@ -806,7 +1082,7 @@ static int hpke_key_schedule(EVP_HPKE_CTX *ctx, uint8_t mode,
   size_t secret_len;
   if (!hpke_labeled_extract(hkdf_md, secret, &secret_len, shared_secret,
                             shared_secret_len, suite_id, sizeof(suite_id),
-                            "secret", NULL, 0)) {
+                            "secret", nullptr, 0)) {
     return 0;
   }
 
@@ -817,7 +1093,7 @@ static int hpke_key_schedule(EVP_HPKE_CTX *ctx, uint8_t mode,
   if (!hpke_labeled_expand(hkdf_md, key, kKeyLen, secret, secret_len, suite_id,
                            sizeof(suite_id), "key", context, context_len) ||
       !EVP_AEAD_CTX_init(&ctx->aead_ctx, aead, key, kKeyLen,
-                         EVP_AEAD_DEFAULT_TAG_LENGTH, NULL)) {
+                         EVP_AEAD_DEFAULT_TAG_LENGTH, nullptr)) {
     return 0;
   }
 
@@ -848,20 +1124,19 @@ void EVP_HPKE_CTX_cleanup(EVP_HPKE_CTX *ctx) {
   EVP_AEAD_CTX_cleanup(&ctx->aead_ctx);
 }
 
-EVP_HPKE_CTX *EVP_HPKE_CTX_new(void) {
-  EVP_HPKE_CTX *ctx =
-      reinterpret_cast<EVP_HPKE_CTX *>(OPENSSL_malloc(sizeof(EVP_HPKE_CTX)));
-  if (ctx == NULL) {
-    return NULL;
+EVP_HPKE_CTX *EVP_HPKE_CTX_new() {
+  EVP_HPKE_CTX *ctx = New<EVP_HPKE_CTX>();
+  if (ctx == nullptr) {
+    return nullptr;
   }
   EVP_HPKE_CTX_zero(ctx);
   return ctx;
 }
 
 void EVP_HPKE_CTX_free(EVP_HPKE_CTX *ctx) {
-  if (ctx != NULL) {
+  if (ctx != nullptr) {
     EVP_HPKE_CTX_cleanup(ctx);
-    OPENSSL_free(ctx);
+    Delete(ctx);
   }
 }
 
@@ -943,7 +1218,7 @@ int EVP_HPKE_CTX_setup_auth_sender_with_seed_for_testing(
     const uint8_t *peer_public_key, size_t peer_public_key_len,
     const uint8_t *info, size_t info_len, const uint8_t *seed,
     size_t seed_len) {
-  if (key->kem->auth_encap_with_seed == NULL) {
+  if (key->kem->auth_encap_with_seed == nullptr) {
     // Not all HPKE KEMs support AuthEncap.
     OPENSSL_PUT_ERROR(EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
     return 0;
@@ -972,7 +1247,7 @@ int EVP_HPKE_CTX_setup_auth_recipient(
     const EVP_HPKE_AEAD *aead, const uint8_t *enc, size_t enc_len,
     const uint8_t *info, size_t info_len, const uint8_t *peer_public_key,
     size_t peer_public_key_len) {
-  if (key->kem->auth_decap == NULL) {
+  if (key->kem->auth_decap == nullptr) {
     // Not all HPKE KEMs support AuthDecap.
     OPENSSL_PUT_ERROR(EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
     return 0;

@@ -1,20 +1,30 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_bn.h>
+
+#include <iterator>
 
 #include <CNIOBoringSSL_err.h>
 #include <CNIOBoringSSL_mem.h>
 
 #include "../../internal.h"
+#include "../../mem_internal.h"
 #include "internal.h"
 
+
+using namespace bssl;
 
 // kPrimes contains the first 1024 primes.
 static const uint16_t kPrimes[] = {
@@ -110,9 +120,9 @@ static const uint16_t kPrimes[] = {
 // necessary for generating a 'bits'-bit candidate prime.
 //
 //
-// This table is generated using the algorithm of FIPS PUB 186-4
-// Digital Signature Standard (DSS), section F.1, page 117.
-// (https://doi.org/10.6028/NIST.FIPS.186-4)
+// This table is generated using the algorithm of FIPS PUB 186-5
+// Digital Signature Standard (DSS), section C.1, page 72.
+// (https://doi.org/10.6028/NIST.FIPS.186-5).
 // The following magma script was used to generate the output:
 // securitybits:=125;
 // k:=1024;
@@ -188,9 +198,9 @@ static int BN_prime_checks_for_size(int bits) {
 // of excluding a candidate with trial division is larger.
 static size_t num_trial_division_primes(const BIGNUM *n) {
   if (n->width * BN_BITS2 > 1024) {
-    return OPENSSL_ARRAY_SIZE(kPrimes);
+    return std::size(kPrimes);
   }
-  return OPENSSL_ARRAY_SIZE(kPrimes) / 2;
+  return std::size(kPrimes) / 2;
 }
 
 // BN_PRIME_CHECKS_BLINDED is the iteration count for blinding the constant-time
@@ -260,11 +270,9 @@ static int probable_prime_dh(BIGNUM *rnd, int bits, const BIGNUM *add,
 static int probable_prime_dh_safe(BIGNUM *rnd, int bits, const BIGNUM *add,
                                   const BIGNUM *rem, BN_CTX *ctx);
 
-BN_GENCB *BN_GENCB_new(void) {
-  return reinterpret_cast<BN_GENCB *>(OPENSSL_zalloc(sizeof(BN_GENCB)));
-}
+BN_GENCB *BN_GENCB_new() { return New<BN_GENCB>(); }
 
-void BN_GENCB_free(BN_GENCB *callback) { OPENSSL_free(callback); }
+void BN_GENCB_free(BN_GENCB *callback) { Delete(callback); }
 
 void BN_GENCB_set(BN_GENCB *callback,
                   int (*f)(int event, int n, struct bn_gencb_st *), void *arg) {
@@ -285,9 +293,7 @@ void *BN_GENCB_get_arg(const BN_GENCB *callback) { return callback->arg; }
 int BN_generate_prime_ex(BIGNUM *ret, int bits, int safe, const BIGNUM *add,
                          const BIGNUM *rem, BN_GENCB *cb) {
   BIGNUM *t;
-  int found = 0;
   int i, j, c1 = 0;
-  BN_CTX *ctx;
   int checks = BN_prime_checks_for_size(bits);
 
   if (bits < 2) {
@@ -300,43 +306,43 @@ int BN_generate_prime_ex(BIGNUM *ret, int bits, int safe, const BIGNUM *add,
     return 0;
   }
 
-  ctx = BN_CTX_new();
-  if (ctx == NULL) {
-    goto err;
+  UniquePtr<BN_CTX> ctx(BN_CTX_new());
+  if (ctx == nullptr) {
+    return 0;
   }
-  BN_CTX_start(ctx);
-  t = BN_CTX_get(ctx);
+  BN_CTXScope scope(ctx.get());
+  t = BN_CTX_get(ctx.get());
   if (!t) {
-    goto err;
+    return 0;
   }
 
 loop:
   // make a random number and set the top and bottom bits
-  if (add == NULL) {
+  if (add == nullptr) {
     if (!probable_prime(ret, bits)) {
-      goto err;
+      return 0;
     }
   } else {
     if (safe) {
-      if (!probable_prime_dh_safe(ret, bits, add, rem, ctx)) {
-        goto err;
+      if (!probable_prime_dh_safe(ret, bits, add, rem, ctx.get())) {
+        return 0;
       }
     } else {
-      if (!probable_prime_dh(ret, bits, add, rem, ctx)) {
-        goto err;
+      if (!probable_prime_dh(ret, bits, add, rem, ctx.get())) {
+        return 0;
       }
     }
   }
 
   if (!BN_GENCB_call(cb, BN_GENCB_GENERATED, c1++)) {
     // aborted
-    goto err;
+    return 0;
   }
 
   if (!safe) {
-    i = BN_is_prime_fasttest_ex(ret, checks, ctx, 0, cb);
+    i = BN_is_prime_fasttest_ex(ret, checks, ctx.get(), 0, cb);
     if (i == -1) {
-      goto err;
+      return 0;
     } else if (i == 0) {
       goto loop;
     }
@@ -344,7 +350,7 @@ loop:
     // for "safe prime" generation, check that (p-1)/2 is prime. Since a prime
     // is odd, We just need to divide by 2
     if (!BN_rshift1(t, ret)) {
-      goto err;
+      return 0;
     }
 
     // Interleave |ret| and |t|'s primality tests to avoid paying the full
@@ -353,37 +359,29 @@ loop:
     // TODO(davidben): This doesn't quite work because an iteration count of 1
     // still runs the blinding mechanism.
     for (i = 0; i < checks; i++) {
-      j = BN_is_prime_fasttest_ex(ret, 1, ctx, 0, NULL);
+      j = BN_is_prime_fasttest_ex(ret, 1, ctx.get(), 0, nullptr);
       if (j == -1) {
-        goto err;
+        return 0;
       } else if (j == 0) {
         goto loop;
       }
 
-      j = BN_is_prime_fasttest_ex(t, 1, ctx, 0, NULL);
+      j = BN_is_prime_fasttest_ex(t, 1, ctx.get(), 0, nullptr);
       if (j == -1) {
-        goto err;
+        return 0;
       } else if (j == 0) {
         goto loop;
       }
 
       if (!BN_GENCB_call(cb, BN_GENCB_PRIME_TEST, i)) {
-        goto err;
+        return 0;
       }
       // We have a safe prime test pass
     }
   }
 
   // we have a prime :-)
-  found = 1;
-
-err:
-  if (ctx != NULL) {
-    BN_CTX_end(ctx);
-    BN_CTX_free(ctx);
-  }
-
-  return found;
+  return 1;
 }
 
 static int bn_trial_division(uint16_t *out, const BIGNUM *bn) {
@@ -400,14 +398,14 @@ static int bn_trial_division(uint16_t *out, const BIGNUM *bn) {
   return 0;
 }
 
-int bn_odd_number_is_obviously_composite(const BIGNUM *bn) {
+int bssl::bn_odd_number_is_obviously_composite(const BIGNUM *bn) {
   uint16_t prime;
   return bn_trial_division(&prime, bn) && !BN_is_word(bn, prime);
 }
 
-int bn_miller_rabin_init(BN_MILLER_RABIN *miller_rabin, const BN_MONT_CTX *mont,
-                         BN_CTX *ctx) {
-  // This function corresponds to steps 1 through 3 of FIPS 186-4, C.3.1.
+int bssl::bn_miller_rabin_init(BN_MILLER_RABIN *miller_rabin,
+                               const BN_MONT_CTX *mont, BN_CTX *ctx) {
+  // This function corresponds to steps 1 through 3 of FIPS 186-5, B.3.1.
   const BIGNUM *w = &mont->N;
   // Note we do not call |BN_CTX_start| in this function. We intentionally
   // allocate values in the containing scope so they outlive this function.
@@ -415,14 +413,14 @@ int bn_miller_rabin_init(BN_MILLER_RABIN *miller_rabin, const BN_MONT_CTX *mont,
   miller_rabin->m = BN_CTX_get(ctx);
   miller_rabin->one_mont = BN_CTX_get(ctx);
   miller_rabin->w1_mont = BN_CTX_get(ctx);
-  if (miller_rabin->w1 == NULL ||        //
-      miller_rabin->m == NULL ||         //
-      miller_rabin->one_mont == NULL ||  //
-      miller_rabin->w1_mont == NULL) {
+  if (miller_rabin->w1 == nullptr ||        //
+      miller_rabin->m == nullptr ||         //
+      miller_rabin->one_mont == nullptr ||  //
+      miller_rabin->w1_mont == nullptr) {
     return 0;
   }
 
-  // See FIPS 186-4, C.3.1, steps 1 through 3.
+  // See FIPS 186-5, B.3.1, steps 1 through 3.
   if (!bn_usub_consttime(miller_rabin->w1, w, BN_value_one())) {
     return 0;
   }
@@ -444,22 +442,21 @@ int bn_miller_rabin_init(BN_MILLER_RABIN *miller_rabin, const BN_MONT_CTX *mont,
   return 1;
 }
 
-int bn_miller_rabin_iteration(const BN_MILLER_RABIN *miller_rabin,
-                              int *out_is_possibly_prime, const BIGNUM *b,
-                              const BN_MONT_CTX *mont, BN_CTX *ctx) {
-  // This function corresponds to steps 4.3 through 4.5 of FIPS 186-4, C.3.1.
-  int ret = 0;
-  BN_CTX_start(ctx);
+int bssl::bn_miller_rabin_iteration(const BN_MILLER_RABIN *miller_rabin,
+                                    int *out_is_possibly_prime, const BIGNUM *b,
+                                    const BN_MONT_CTX *mont, BN_CTX *ctx) {
+  // This function corresponds to steps 4.3 through 4.5 of FIPS 186-5, B.3.1.
+  BN_CTXScope scope(ctx);
 
   // Step 4.3. We use Montgomery-encoding for better performance and to avoid
   // timing leaks.
   const BIGNUM *w = &mont->N;
   BIGNUM *z = BN_CTX_get(ctx);
   crypto_word_t is_possibly_prime;
-  if (z == NULL ||
+  if (z == nullptr ||
       !BN_mod_exp_mont_consttime(z, b, miller_rabin->m, w, ctx, mont) ||
       !BN_to_montgomery(z, z, mont, ctx)) {
-    goto err;
+    return 0;
   }
 
   // is_possibly_prime is all ones if we have determined |b| is not a composite
@@ -488,7 +485,7 @@ int bn_miller_rabin_iteration(const BN_MILLER_RABIN *miller_rabin,
 
     // Step 4.5.1.
     if (!BN_mod_mul_montgomery(z, z, z, mont, ctx)) {
-      goto err;
+      return 0;
     }
 
     // Step 4.5.2. If z = w-1 and the loop is not done, this is not a composite
@@ -508,11 +505,7 @@ int bn_miller_rabin_iteration(const BN_MILLER_RABIN *miller_rabin,
   }
 
   *out_is_possibly_prime = constant_time_declassify_w(is_possibly_prime) & 1;
-  ret = 1;
-
-err:
-  BN_CTX_end(ctx);
-  return ret;
+  return 1;
 }
 
 int BN_primality_test(int *out_is_probably_prime, const BIGNUM *w, int checks,
@@ -541,7 +534,7 @@ int BN_primality_test(int *out_is_probably_prime, const BIGNUM *w, int checks,
   //
   // 2. For a random (i.e. non-adversarial) candidate large prime and candidate
   //    witness, the probability of false witness is very low. (This is why FIPS
-  //    186-4 only requires a few iterations.) Thus composites not discarded by
+  //    186-5 only requires a few iterations.) Thus composites not discarded by
   //    trial decryption, in practice, cost one Miller-Rabin iteration. Only the
   //    two actual primes cost the full iteration count.
   //
@@ -593,32 +586,31 @@ int BN_primality_test(int *out_is_probably_prime, const BIGNUM *w, int checks,
     checks = BN_prime_checks_for_size(BN_num_bits(w));
   }
 
-  BN_CTX *new_ctx = NULL;
-  if (ctx == NULL) {
-    new_ctx = BN_CTX_new();
-    if (new_ctx == NULL) {
+  UniquePtr<BN_CTX> new_ctx;
+  if (ctx == nullptr) {
+    new_ctx.reset(BN_CTX_new());
+    if (new_ctx == nullptr) {
       return 0;
     }
-    ctx = new_ctx;
+    ctx = new_ctx.get();
   }
 
-  // See C.3.1 from FIPS 186-4.
-  int ret = 0;
-  BN_CTX_start(ctx);
+  // See B.3.1 from FIPS 186-5.
+  BN_CTXScope scope(ctx);
   BIGNUM *b = BN_CTX_get(ctx);
-  BN_MONT_CTX *mont = BN_MONT_CTX_new_consttime(w, ctx);
+  UniquePtr<BN_MONT_CTX> mont(BN_MONT_CTX_new_consttime(w, ctx));
   BN_MILLER_RABIN miller_rabin;
   crypto_word_t uniform_iterations = 0;
-  if (b == NULL || mont == NULL ||
+  if (b == nullptr || mont == nullptr ||
       // Steps 1-3.
-      !bn_miller_rabin_init(&miller_rabin, mont, ctx)) {
-    goto err;
+      !bn_miller_rabin_init(&miller_rabin, mont.get(), ctx)) {
+    return 0;
   }
 
   // The following loop performs in inner iteration of the Miller-Rabin
   // Primality test (Step 4).
   //
-  // The algorithm as specified in FIPS 186-4 leaks information on |w|, the RSA
+  // The algorithm as specified in FIPS 186-5 leaks information on |w|, the RSA
   // private key. Instead, we run through each iteration unconditionally,
   // performing modular multiplications, masking off any effects to behave
   // equivalently to the specified algorithm.
@@ -631,7 +623,7 @@ int BN_primality_test(int *out_is_probably_prime, const BIGNUM *w, int checks,
   //
   // Miller-Rabin is already probabilistic, so we could reach the desired
   // confidence levels by just suitably increasing the iteration count. However,
-  // to align with FIPS 186-4, we use a more pessimal analysis: we do not count
+  // to align with FIPS 186-5, we use a more pessimal analysis: we do not count
   // the non-uniform values towards the iteration count. As a result, this
   // function is more complex and has more timing risk than necessary.
   //
@@ -652,39 +644,32 @@ int BN_primality_test(int *out_is_probably_prime, const BIGNUM *w, int checks,
     // Step 4.1-4.2
     int is_uniform;
     if (!bn_rand_secret_range(b, &is_uniform, 2, miller_rabin.w1)) {
-      goto err;
+      return 0;
     }
     uniform_iterations += is_uniform;
 
     // Steps 4.3-4.5
     int is_possibly_prime = 0;
-    if (!bn_miller_rabin_iteration(&miller_rabin, &is_possibly_prime, b, mont,
-                                   ctx)) {
-      goto err;
+    if (!bn_miller_rabin_iteration(&miller_rabin, &is_possibly_prime, b,
+                                   mont.get(), ctx)) {
+      return 0;
     }
 
     if (!is_possibly_prime) {
       // Step 4.6. We did not see z = w-1 before z = 1, so w must be composite.
       *out_is_probably_prime = 0;
-      ret = 1;
-      goto err;
+      return 1;
     }
 
     // Step 4.7
     if (!BN_GENCB_call(cb, BN_GENCB_PRIME_TEST, i - 1)) {
-      goto err;
+      return 0;
     }
   }
 
   declassify_assert(uniform_iterations >= (crypto_word_t)checks);
   *out_is_probably_prime = 1;
-  ret = 1;
-
-err:
-  BN_MONT_CTX_free(mont);
-  BN_CTX_end(ctx);
-  BN_CTX_free(new_ctx);
-  return ret;
+  return 1;
 }
 
 int BN_is_prime_ex(const BIGNUM *candidate, int checks, BN_CTX *ctx,
@@ -715,41 +700,36 @@ int BN_enhanced_miller_rabin_primality_test(
     checks = BN_prime_checks_for_size(BN_num_bits(w));
   }
 
-  int ret = 0;
-  BN_MONT_CTX *mont = NULL;
-
-  BN_CTX_start(ctx);
-
+  BN_CTXScope scope(ctx);
   BIGNUM *w1 = BN_CTX_get(ctx);
-  BIGNUM *b, *g, *z, *x, *x1, *m;
-  int a;
-  if (w1 == NULL || !BN_copy(w1, w) || !BN_sub_word(w1, 1)) {
-    goto err;
+  if (w1 == nullptr || !BN_copy(w1, w) || !BN_sub_word(w1, 1)) {
+    return 0;
   }
 
   // Write w1 as m*2^a (Steps 1 and 2).
-  a = 0;
+  int a = 0;
   while (!BN_is_bit_set(w1, a)) {
     a++;
   }
-  m = BN_CTX_get(ctx);
-  if (m == NULL || !BN_rshift(m, w1, a)) {
-    goto err;
+  BIGNUM *m = BN_CTX_get(ctx);
+  if (m == nullptr || !BN_rshift(m, w1, a)) {
+    return 0;
   }
 
-  b = BN_CTX_get(ctx);
-  g = BN_CTX_get(ctx);
-  z = BN_CTX_get(ctx);
-  x = BN_CTX_get(ctx);
-  x1 = BN_CTX_get(ctx);
-  if (b == NULL || g == NULL || z == NULL || x == NULL || x1 == NULL) {
-    goto err;
+  BIGNUM *b = BN_CTX_get(ctx);
+  BIGNUM *g = BN_CTX_get(ctx);
+  BIGNUM *z = BN_CTX_get(ctx);
+  BIGNUM *x = BN_CTX_get(ctx);
+  BIGNUM *x1 = BN_CTX_get(ctx);
+  if (b == nullptr || g == nullptr || z == nullptr || x == nullptr ||
+      x1 == nullptr) {
+    return 0;
   }
 
   // Montgomery setup for computations mod w
-  mont = BN_MONT_CTX_new_for_modulus(w, ctx);
-  if (mont == NULL) {
-    goto err;
+  UniquePtr<BN_MONT_CTX> mont(BN_MONT_CTX_new_for_modulus(w, ctx));
+  if (mont == nullptr) {
+    return 0;
   }
 
   // The following loop performs in inner iteration of the Enhanced Miller-Rabin
@@ -757,22 +737,21 @@ int BN_enhanced_miller_rabin_primality_test(
   for (int i = 1; i <= checks; i++) {
     // Step 4.1-4.2
     if (!BN_rand_range_ex(b, 2, w1)) {
-      goto err;
+      return 0;
     }
 
     // Step 4.3-4.4
     if (!BN_gcd(g, b, w, ctx)) {
-      goto err;
+      return 0;
     }
     if (BN_cmp_word(g, 1) > 0) {
       *out_result = bn_composite;
-      ret = 1;
-      goto err;
+      return 1;
     }
 
     // Step 4.5
-    if (!BN_mod_exp_mont(z, b, m, w, ctx, mont)) {
-      goto err;
+    if (!BN_mod_exp_mont(z, b, m, w, ctx, mont.get())) {
+      return 0;
     }
 
     // Step 4.6
@@ -783,7 +762,7 @@ int BN_enhanced_miller_rabin_primality_test(
     // Step 4.7
     for (int j = 1; j < a; j++) {
       if (!BN_copy(x, z) || !BN_mod_mul(z, x, x, w, ctx)) {
-        goto err;
+        return 0;
       }
       if (BN_cmp(z, w1) == 0) {
         goto loop;
@@ -795,18 +774,18 @@ int BN_enhanced_miller_rabin_primality_test(
 
     // Step 4.8-4.9
     if (!BN_copy(x, z) || !BN_mod_mul(z, x, x, w, ctx)) {
-      goto err;
+      return 0;
     }
 
     // Step 4.10-4.11
     if (!BN_is_one(z) && !BN_copy(x, z)) {
-      goto err;
+      return 0;
     }
 
   composite:
     // Step 4.12-4.14
     if (!BN_copy(x1, x) || !BN_sub_word(x1, 1) || !BN_gcd(g, x1, w, ctx)) {
-      goto err;
+      return 0;
     }
     if (BN_cmp_word(g, 1) > 0) {
       *out_result = bn_composite;
@@ -814,24 +793,17 @@ int BN_enhanced_miller_rabin_primality_test(
       *out_result = bn_non_prime_power_composite;
     }
 
-    ret = 1;
-    goto err;
+    return 1;
 
   loop:
     // Step 4.15
     if (!BN_GENCB_call(cb, BN_GENCB_PRIME_TEST, i - 1)) {
-      goto err;
+      return 0;
     }
   }
 
   *out_result = bn_probably_prime;
-  ret = 1;
-
-err:
-  BN_MONT_CTX_free(mont);
-  BN_CTX_end(ctx);
-
-  return ret;
+  return 1;
 }
 
 static int probable_prime(BIGNUM *rnd, int bits) {
@@ -845,111 +817,99 @@ static int probable_prime(BIGNUM *rnd, int bits) {
 
 static int probable_prime_dh(BIGNUM *rnd, int bits, const BIGNUM *add,
                              const BIGNUM *rem, BN_CTX *ctx) {
-  int ret = 0;
+  BN_CTXScope scope(ctx);
   BIGNUM *t1;
-
-  BN_CTX_start(ctx);
-  size_t num_primes;
-  if ((t1 = BN_CTX_get(ctx)) == NULL) {
-    goto err;
+  if ((t1 = BN_CTX_get(ctx)) == nullptr) {
+    return 0;
   }
 
   if (!BN_rand(rnd, bits, BN_RAND_TOP_ONE, BN_RAND_BOTTOM_ODD)) {
-    goto err;
+    return 0;
   }
 
   // we need ((rnd-rem) % add) == 0
-
   if (!BN_mod(t1, rnd, add, ctx)) {
-    goto err;
+    return 0;
   }
   if (!BN_sub(rnd, rnd, t1)) {
-    goto err;
+    return 0;
   }
-  if (rem == NULL) {
+  if (rem == nullptr) {
     if (!BN_add_word(rnd, 1)) {
-      goto err;
+      return 0;
     }
   } else {
     if (!BN_add(rnd, rnd, rem)) {
-      goto err;
+      return 0;
     }
   }
   // we now have a random number 'rand' to test.
 
-  num_primes = num_trial_division_primes(rnd);
+  size_t num_primes = num_trial_division_primes(rnd);
 loop:
   for (size_t i = 1; i < num_primes; i++) {
     // check that rnd is a prime
     if (bn_mod_u16_consttime(rnd, kPrimes[i]) <= 1) {
       if (!BN_add(rnd, rnd, add)) {
-        goto err;
+        return 0;
       }
       goto loop;
     }
   }
 
-  ret = 1;
-
-err:
-  BN_CTX_end(ctx);
-  return ret;
+  return 1;
 }
 
 static int probable_prime_dh_safe(BIGNUM *p, int bits, const BIGNUM *padd,
                                   const BIGNUM *rem, BN_CTX *ctx) {
-  int ret = 0;
-  BIGNUM *t1, *qadd, *q;
-
   bits--;
-  BN_CTX_start(ctx);
-  t1 = BN_CTX_get(ctx);
-  q = BN_CTX_get(ctx);
-  qadd = BN_CTX_get(ctx);
-  size_t num_primes;
-  if (qadd == NULL) {
-    goto err;
+  BN_CTXScope scope(ctx);
+  BIGNUM *t1 = BN_CTX_get(ctx);
+  BIGNUM *q = BN_CTX_get(ctx);
+  BIGNUM *qadd = BN_CTX_get(ctx);
+  if (qadd == nullptr) {
+    return 0;
   }
 
   if (!BN_rshift1(qadd, padd)) {
-    goto err;
+    return 0;
   }
 
   if (!BN_rand(q, bits, BN_RAND_TOP_ONE, BN_RAND_BOTTOM_ODD)) {
-    goto err;
+    return 0;
   }
 
   // we need ((rnd-rem) % add) == 0
   if (!BN_mod(t1, q, qadd, ctx)) {
-    goto err;
+    return 0;
   }
 
   if (!BN_sub(q, q, t1)) {
-    goto err;
+    return 0;
   }
 
-  if (rem == NULL) {
+  if (rem == nullptr) {
     if (!BN_add_word(q, 1)) {
-      goto err;
+      return 0;
     }
   } else {
     if (!BN_rshift1(t1, rem)) {
-      goto err;
+      return 0;
     }
     if (!BN_add(q, q, t1)) {
-      goto err;
+      return 0;
     }
   }
 
   // we now have a random number 'rand' to test.
   if (!BN_lshift1(p, q)) {
-    goto err;
+    return 0;
   }
   if (!BN_add_word(p, 1)) {
-    goto err;
+    return 0;
   }
 
-  num_primes = num_trial_division_primes(p);
+  size_t num_primes = num_trial_division_primes(p);
 loop:
   for (size_t i = 1; i < num_primes; i++) {
     // check that p and q are prime
@@ -958,18 +918,14 @@ loop:
     if (bn_mod_u16_consttime(p, kPrimes[i]) == 0 ||
         bn_mod_u16_consttime(q, kPrimes[i]) == 0) {
       if (!BN_add(p, p, padd)) {
-        goto err;
+        return 0;
       }
       if (!BN_add(q, q, qadd)) {
-        goto err;
+        return 0;
       }
       goto loop;
     }
   }
 
-  ret = 1;
-
-err:
-  BN_CTX_end(ctx);
-  return ret;
+  return 1;
 }

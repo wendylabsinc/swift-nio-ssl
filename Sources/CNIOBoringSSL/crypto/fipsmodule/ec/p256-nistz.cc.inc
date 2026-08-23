@@ -1,20 +1,25 @@
-/*
- * Copyright 2014-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright (c) 2014, Intel Corporation. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- *
- * Originally written by Shay Gueron (1, 2), and Vlad Krasnov (1)
- * (1) Intel Corporation, Israel Development Center, Haifa, Israel
- * (2) University of Haifa, Israel
- *
- * Reference:
- * S.Gueron and V.Krasnov, "Fast Prime Field Elliptic Curve Cryptography with
- *                          256 Bit Primes"
- */
+// Copyright 2014-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright (c) 2014, Intel Corporation. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Originally written by Shay Gueron (1, 2), and Vlad Krasnov (1)
+// (1) Intel Corporation, Israel Development Center, Haifa, Israel
+// (2) University of Haifa, Israel
+//
+// Reference:
+// S.Gueron and V.Krasnov, "Fast Prime Field Elliptic Curve Cryptography with
+//                          256 Bit Primes"
 
 #include <CNIOBoringSSL_ec.h>
 
@@ -31,6 +36,9 @@
 #include "../delocate.h"
 #include "internal.h"
 #include "p256-nistz.h"
+
+
+using namespace bssl;
 
 #if !defined(OPENSSL_NO_ASM) &&                              \
     (defined(OPENSSL_X86_64) || defined(OPENSSL_AARCH64)) && \
@@ -288,8 +296,8 @@ static void ecp_nistz256_mod_inverse_sqr_mont(BN_ULONG r[P256_LIMBS],
 static void ecp_nistz256_windowed_mul(const EC_GROUP *group, P256_POINT *r,
                                       const EC_JACOBIAN *p,
                                       const EC_SCALAR *p_scalar) {
-  assert(p != NULL);
-  assert(p_scalar != NULL);
+  assert(p != nullptr);
+  assert(p_scalar != nullptr);
   assert(group->field.N.width == P256_LIMBS);
 
   static const size_t kWindowSize = 5;
@@ -459,7 +467,7 @@ static void ecp_nistz256_points_mul_public(const EC_GROUP *group,
                                            const EC_SCALAR *g_scalar,
                                            const EC_JACOBIAN *p_,
                                            const EC_SCALAR *p_scalar) {
-  assert(p_ != NULL && p_scalar != NULL && g_scalar != NULL);
+  assert(p_ != nullptr && p_scalar != nullptr && g_scalar != nullptr);
 
   alignas(32) P256_POINT p;
   uint8_t p_str[33];
@@ -531,11 +539,11 @@ static int ecp_nistz256_get_affine(const EC_GROUP *group,
   assert(group->field.N.width == P256_LIMBS);
   ecp_nistz256_mod_inverse_sqr_mont(z_inv2, point->Z.words);
 
-  if (x != NULL) {
+  if (x != nullptr) {
     ecp_nistz256_mul_mont(x->words, z_inv2, point->X.words);
   }
 
-  if (y != NULL) {
+  if (y != nullptr) {
     ecp_nistz256_sqr_mont(z_inv2, z_inv2);                            // z^-4
     ecp_nistz256_mul_mont(y->words, point->Y.words, point->Z.words);  // y * z
     ecp_nistz256_mul_mont(y->words, y->words, z_inv2);  // y * z^-3
@@ -646,9 +654,9 @@ static void ecp_nistz256_inv0_mod_ord(const EC_GROUP *group, EC_SCALAR *out,
                   {4, i_111},     {5, i_111},    {5, i_101},    {3, i_11},
                   {10, i_101111}, {2, i_11},     {5, i_11},     {5, i_11},
                   {3, i_1},       {7, i_10101},  {6, i_1111}};
-  for (size_t i = 0; i < OPENSSL_ARRAY_SIZE(kChain); i++) {
-    ecp_nistz256_ord_sqr_mont(out->words, out->words, kChain[i].p);
-    ecp_nistz256_ord_mul_mont(out->words, out->words, table[kChain[i].i]);
+  for (const auto &step : kChain) {
+    ecp_nistz256_ord_sqr_mont(out->words, out->words, step.p);
+    ecp_nistz256_ord_mul_mont(out->words, out->words, table[step.i]);
   }
 }
 
@@ -710,6 +718,8 @@ static int ecp_nistz256_cmp_x_coordinate(const EC_GROUP *group,
   return 0;
 }
 
+BSSL_NAMESPACE_BEGIN
+
 DEFINE_METHOD_FUNCTION(EC_METHOD, EC_GFp_nistz256_method) {
   out->point_get_affine_coordinates = ecp_nistz256_get_affine;
   out->add = ecp_nistz256_add;
@@ -730,6 +740,8 @@ DEFINE_METHOD_FUNCTION(EC_METHOD, EC_GFp_nistz256_method) {
       ecp_nistz256_scalar_to_montgomery_inv_vartime;
   out->cmp_x_coordinate = ecp_nistz256_cmp_x_coordinate;
 }
+
+BSSL_NAMESPACE_END
 
 #endif /* !defined(OPENSSL_NO_ASM) &&                              \
           (defined(OPENSSL_X86_64) || defined(OPENSSL_AARCH64)) && \

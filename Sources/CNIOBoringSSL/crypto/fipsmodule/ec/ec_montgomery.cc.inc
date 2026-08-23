@@ -1,12 +1,17 @@
-/*
- * Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ec.h>
 
@@ -18,6 +23,8 @@
 #include "../delocate.h"
 #include "internal.h"
 
+
+using namespace bssl;
 
 static void ec_GFp_mont_felem_to_montgomery(const EC_GROUP *group,
                                             EC_FELEM *out, const EC_FELEM *in) {
@@ -38,27 +45,27 @@ static void ec_GFp_mont_felem_inv0(const EC_GROUP *group, EC_FELEM *out,
                                    &group->field);
 }
 
-void ec_GFp_mont_felem_mul(const EC_GROUP *group, EC_FELEM *r,
-                           const EC_FELEM *a, const EC_FELEM *b) {
+void bssl::ec_GFp_mont_felem_mul(const EC_GROUP *group, EC_FELEM *r,
+                                 const EC_FELEM *a, const EC_FELEM *b) {
   bn_mod_mul_montgomery_small(r->words, a->words, b->words,
                               group->field.N.width, &group->field);
 }
 
-void ec_GFp_mont_felem_sqr(const EC_GROUP *group, EC_FELEM *r,
-                           const EC_FELEM *a) {
+void bssl::ec_GFp_mont_felem_sqr(const EC_GROUP *group, EC_FELEM *r,
+                                 const EC_FELEM *a) {
   bn_mod_mul_montgomery_small(r->words, a->words, a->words,
                               group->field.N.width, &group->field);
 }
 
-void ec_GFp_mont_felem_to_bytes(const EC_GROUP *group, uint8_t *out,
-                                size_t *out_len, const EC_FELEM *in) {
+void bssl::ec_GFp_mont_felem_to_bytes(const EC_GROUP *group, uint8_t *out,
+                                      size_t *out_len, const EC_FELEM *in) {
   EC_FELEM tmp;
   ec_GFp_mont_felem_from_montgomery(group, &tmp, in);
   ec_GFp_simple_felem_to_bytes(group, out, out_len, &tmp);
 }
 
-int ec_GFp_mont_felem_from_bytes(const EC_GROUP *group, EC_FELEM *out,
-                                 const uint8_t *in, size_t len) {
+int bssl::ec_GFp_mont_felem_from_bytes(const EC_GROUP *group, EC_FELEM *out,
+                                       const uint8_t *in, size_t len) {
   if (!ec_GFp_simple_felem_from_bytes(group, out, in, len)) {
     return 0;
   }
@@ -67,8 +74,8 @@ int ec_GFp_mont_felem_from_bytes(const EC_GROUP *group, EC_FELEM *out,
   return 1;
 }
 
-void ec_GFp_mont_felem_reduce(const EC_GROUP *group, EC_FELEM *out,
-                              const BN_ULONG *words, size_t num) {
+void bssl::ec_GFp_mont_felem_reduce(const EC_GROUP *group, EC_FELEM *out,
+                                    const BN_ULONG *words, size_t num) {
   // Convert "from" Montgomery form so the value is reduced mod p.
   bn_from_montgomery_small(out->words, group->field.N.width, words, num,
                            &group->field);
@@ -78,9 +85,9 @@ void ec_GFp_mont_felem_reduce(const EC_GROUP *group, EC_FELEM *out,
   ec_GFp_mont_felem_to_montgomery(group, out, out);
 }
 
-void ec_GFp_mont_felem_exp(const EC_GROUP *group, EC_FELEM *out,
-                           const EC_FELEM *a, const BN_ULONG *exp,
-                           size_t num_exp) {
+void bssl::ec_GFp_mont_felem_exp(const EC_GROUP *group, EC_FELEM *out,
+                                 const EC_FELEM *a, const BN_ULONG *exp,
+                                 size_t num_exp) {
   bn_mod_exp_mont_small(out->words, a->words, group->field.N.width, exp,
                         num_exp, &group->field);
 }
@@ -100,11 +107,11 @@ static int ec_GFp_mont_point_get_affine_coordinates(const EC_GROUP *group,
   ec_GFp_mont_felem_inv0(group, &z2, &point->Z);
   ec_GFp_mont_felem_sqr(group, &z1, &z2);
 
-  if (x != NULL) {
+  if (x != nullptr) {
     ec_GFp_mont_felem_mul(group, x, &point->X, &z1);
   }
 
-  if (y != NULL) {
+  if (y != nullptr) {
     ec_GFp_mont_felem_mul(group, &z1, &z1, &z2);
     ec_GFp_mont_felem_mul(group, y, &point->Y, &z1);
   }
@@ -158,8 +165,8 @@ static int ec_GFp_mont_jacobian_to_affine_batch(const EC_GROUP *group,
   return 1;
 }
 
-void ec_GFp_mont_add(const EC_GROUP *group, EC_JACOBIAN *out,
-                     const EC_JACOBIAN *a, const EC_JACOBIAN *b) {
+void bssl::ec_GFp_mont_add(const EC_GROUP *group, EC_JACOBIAN *out,
+                           const EC_JACOBIAN *a, const EC_JACOBIAN *b) {
   if (a == b) {
     ec_GFp_mont_dbl(group, out, a);
     return;
@@ -269,8 +276,8 @@ void ec_GFp_mont_add(const EC_GROUP *group, EC_JACOBIAN *out,
   ec_felem_select(group, &out->Z, z2nz, &z_out, &a->Z);
 }
 
-void ec_GFp_mont_dbl(const EC_GROUP *group, EC_JACOBIAN *r,
-                     const EC_JACOBIAN *a) {
+void bssl::ec_GFp_mont_dbl(const EC_GROUP *group, EC_JACOBIAN *r,
+                           const EC_JACOBIAN *a) {
   if (group->a_is_minus3) {
     // The method is taken from:
     //   http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-3.html#doubling-dbl-2001-b
@@ -410,6 +417,8 @@ static int ec_GFp_mont_cmp_x_coordinate(const EC_GROUP *group,
   return 0;
 }
 
+BSSL_NAMESPACE_BEGIN
+
 DEFINE_METHOD_FUNCTION(EC_METHOD, EC_GFp_mont_method) {
   out->point_get_affine_coordinates = ec_GFp_mont_point_get_affine_coordinates;
   out->jacobian_to_affine_batch = ec_GFp_mont_jacobian_to_affine_batch;
@@ -432,3 +441,5 @@ DEFINE_METHOD_FUNCTION(EC_METHOD, EC_GFp_mont_method) {
       ec_simple_scalar_to_montgomery_inv_vartime;
   out->cmp_x_coordinate = ec_GFp_mont_cmp_x_coordinate;
 }
+
+BSSL_NAMESPACE_END
