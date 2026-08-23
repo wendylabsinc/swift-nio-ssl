@@ -26,7 +26,7 @@ final class ByteBufferBIOTest: XCTestCase {
     }
 
     /// This leaks on purpose!
-    private func retainedBIO() -> UnsafeMutablePointer<BIO> {
+    private func retainedBIO() -> OpaquePointer {
         let swiftBIO = ByteBufferBIO(allocator: ByteBufferAllocator(), maximumPreservedOutboundBufferCapacity: .max)
         swiftBIO.close()
         return swiftBIO.retainedBIO()
@@ -229,7 +229,7 @@ final class ByteBufferBIOTest: XCTestCase {
     }
 
     func testWriteWhenDroppedBufferDoesNotTriggerCoW() {
-        func writeAddress(swiftBIO: ByteBufferBIO, cBIO: UnsafeMutablePointer<BIO>) -> UInt? {
+        func writeAddress(swiftBIO: ByteBufferBIO, cBIO: OpaquePointer) -> UInt? {
             var bytesToWrite: [UInt8] = [1, 2, 3, 4, 5]
             let rc = CNIOBoringSSL_BIO_write(cBIO, &bytesToWrite, 5)
             XCTAssertEqual(rc, 5)

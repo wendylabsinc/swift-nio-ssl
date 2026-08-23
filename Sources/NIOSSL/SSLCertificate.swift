@@ -379,7 +379,7 @@ extension NIOSSLCertificate {
     }
 
     /// Reads `NIOSSLCertificate`s from the given BIO.
-    private class func readCertificatesFromBIO(_ bio: UnsafeMutablePointer<BIO>) throws -> [NIOSSLCertificate] {
+    private class func readCertificatesFromBIO(_ bio: OpaquePointer) throws -> [NIOSSLCertificate] {
         guard let x509 = CNIOBoringSSL_PEM_read_bio_X509_AUX(bio, nil, nil, nil) else {
             throw NIOSSLError.failedToLoadCertificate
         }

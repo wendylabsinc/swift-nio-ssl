@@ -32,6 +32,22 @@ size_t CNIOBoringSSLShims_sk_X509_EXTENSION_num(const STACK_OF(X509_EXTENSION) *
 GENERAL_NAME *CNIOBoringSSLShims_sk_GENERAL_NAME_value(const STACK_OF(GENERAL_NAME) *sk, size_t i);
 size_t CNIOBoringSSLShims_sk_GENERAL_NAME_num(const STACK_OF(GENERAL_NAME) *sk);
 
+void CNIOBoringSSLShims_sk_X509_EXTENSION_free(STACK_OF(X509_EXTENSION) *sk);
+
+size_t CNIOBoringSSLShims_sk_X509_num(const STACK_OF(X509) *sk);
+X509 *CNIOBoringSSLShims_sk_X509_value(const STACK_OF(X509) *sk, size_t i);
+STACK_OF(X509) *CNIOBoringSSLShims_sk_X509_new_null(void);
+size_t CNIOBoringSSLShims_sk_X509_push(STACK_OF(X509) *sk, X509 *x509);
+void CNIOBoringSSLShims_sk_X509_pop_free(STACK_OF(X509) *sk, void (*func)(X509 *));
+
+size_t CNIOBoringSSLShims_sk_X509_NAME_num(const STACK_OF(X509_NAME) *sk);
+
+size_t CNIOBoringSSLShims_sk_CRYPTO_BUFFER_num(const STACK_OF(CRYPTO_BUFFER) *sk);
+CRYPTO_BUFFER *CNIOBoringSSLShims_sk_CRYPTO_BUFFER_value(const STACK_OF(CRYPTO_BUFFER) *sk, size_t i);
+
+size_t CNIOBoringSSLShims_sk_SSL_CIPHER_num(const STACK_OF(SSL_CIPHER) *sk);
+const SSL_CIPHER *CNIOBoringSSLShims_sk_SSL_CIPHER_value(const STACK_OF(SSL_CIPHER) *sk, size_t i);
+
 void *CNIOBoringSSLShims_SSL_CTX_get_app_data(const SSL_CTX *ctx);
 int CNIOBoringSSLShims_SSL_CTX_set_app_data(SSL_CTX *ctx, void *data);
 

@@ -826,7 +826,7 @@ extension NIOSSLContext {
         guard let caNameList = CNIOBoringSSL_SSL_CTX_get_client_CA_list(self.sslContext) else {
             return 0
         }
-        return CNIOBoringSSL_sk_X509_NAME_num(caNameList)
+        return CNIOBoringSSLShims_sk_X509_NAME_num(caNameList)
     }
 }
 
@@ -904,13 +904,13 @@ extension NIOSSLContext.NIOTLSCipherBuffers: RandomAccessCollection {
     }
 
     var count: Int {
-        CNIOBoringSSL_sk_SSL_CIPHER_num(self.basePointer)
+        CNIOBoringSSLShims_sk_SSL_CIPHER_num(self.basePointer)
     }
 
     subscript(position: Index) -> NIOTLSCipher {
         precondition(position < self.endIndex)
         precondition(position >= self.startIndex)
-        guard let ptr = CNIOBoringSSL_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
+        guard let ptr = CNIOBoringSSLShims_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
             preconditionFailure("Unable to locate backing pointer.")
         }
         let cipherID = CNIOBoringSSL_SSL_CIPHER_get_protocol_id(ptr)

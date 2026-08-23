@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 @_implementationOnly import CNIOBoringSSL
+@_implementationOnly import CNIOBoringSSLShims
 import NIOCore
 
 internal let SSL_MAX_RECORD_SIZE = 16 * 1024
@@ -558,12 +559,12 @@ extension SSLConnection.PeerCertificateChainBuffers: RandomAccessCollection {
     }
 
     var count: Int {
-        CNIOBoringSSL_sk_CRYPTO_BUFFER_num(self.basePointer)
+        CNIOBoringSSLShims_sk_CRYPTO_BUFFER_num(self.basePointer)
     }
 
     subscript(_ index: Index) -> UnsafeRawBufferPointer {
         precondition(index < self.endIndex)
-        guard let ptr = CNIOBoringSSL_sk_CRYPTO_BUFFER_value(self.basePointer, index.index) else {
+        guard let ptr = CNIOBoringSSLShims_sk_CRYPTO_BUFFER_value(self.basePointer, index.index) else {
             preconditionFailure("Unable to locate backing pointer.")
         }
         guard let dataPointer = CNIOBoringSSL_CRYPTO_BUFFER_data(ptr) else {
