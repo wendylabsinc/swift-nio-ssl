@@ -271,6 +271,34 @@ public struct SignatureAlgorithm: RawRepresentable, Hashable, Sendable {
     public static let mldsa87 = SignatureAlgorithm(rawValue: 0x0906)
 }
 
+extension SignatureAlgorithm {
+    /// The signature algorithms NIOSSL advertises and accepts for verification
+    /// when the user has not set `TLSConfiguration/verifySignatureAlgorithms`.
+    ///
+    /// The classical entries mirror BoringSSL's built-in default verify list
+    /// (`kVerifySignatureAlgorithms`), in the same order, so classical
+    /// negotiation is unchanged. ML-DSA is then additionally advertised: this
+    /// vendored BoringSSL leads its *signing* defaults with ML-DSA but omits it
+    /// from the *verify* defaults, so without this a peer would never offer to
+    /// verify an ML-DSA signature and the handshake would fail with
+    /// NO_COMMON_SIGNATURE_ALGORITHMS. Users can still narrow the set by setting
+    /// `verifySignatureAlgorithms` explicitly.
+    internal static let defaultVerifyAlgorithms: [SignatureAlgorithm] = [
+        .ecdsaSecp256R1Sha256,
+        .rsaPssRsaeSha256,
+        .rsaPkcs1Sha256,
+        .ecdsaSecp384R1Sha384,
+        .rsaPssRsaeSha384,
+        .rsaPkcs1Sha384,
+        .rsaPssRsaeSha512,
+        .rsaPkcs1Sha512,
+        .rsaPkcs1Sha1,
+        .mldsa44,
+        .mldsa65,
+        .mldsa87,
+    ]
+}
+
 /// A secure default configuration of cipher suites for TLS 1.2 and earlier.
 ///
 /// The goal of this cipher suite string is:
