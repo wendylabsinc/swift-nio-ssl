@@ -189,10 +189,8 @@ final class MLDSAIntegrationTest: XCTestCase {
         )
         config.certificateVerification = .noHostnameVerification
         config.trustRoots = .certificates([trustRoot])
-        // BoringSSL's default advertised (verify) signature-algorithm list does
-        // not include ML-DSA, so the peer would never offer to verify an ML-DSA
-        // signature. Opt in explicitly. See the note on `mldsaSignatureAlgorithms`.
-        config.verifySignatureAlgorithms = Self.mldsaSignatureAlgorithms
+        // Deliberately leave `verifySignatureAlgorithms` unset: NIOSSL's default
+        // advertises ML-DSA, so no per-peer opt-in is required.
         return try NIOSSLContext(configuration: config)
     }
 
@@ -202,22 +200,17 @@ final class MLDSAIntegrationTest: XCTestCase {
         config.trustRoots = .certificates([trustRoot])
         config.certificateChain = [.certificate(pki.clientLeaf), .certificate(pki.intermediate)]
         config.privateKey = .privateKey(NIOSSLPrivateKey.fromUnsafePointer(takingOwnership: pki.clientKey))
-        config.verifySignatureAlgorithms = Self.mldsaSignatureAlgorithms
+        // Deliberately leave `verifySignatureAlgorithms` unset.
         return try NIOSSLContext(configuration: config)
     }
 
-    /// ML-DSA-65 plus the classical algorithms needed for the mixed P-256 leaf
-    /// case. Both peers must advertise these so each side is willing to verify
-    /// the other's certificate-verify signature.
-    private static let mldsaSignatureAlgorithms: [SignatureAlgorithm] = [
-        .mldsa65,
-        .ecdsaSecp256R1Sha256,
-        .rsaPssRsaeSha256,
-        .ed25519,
-    ]
-
     /// Full ML-DSA-65 chain on both ends: root -> intermediate -> leaf, with the
     /// client presenting a leaf chain that must validate to the pinned root.
+    ///
+    /// Neither peer sets `verifySignatureAlgorithms`, so this also verifies that
+    /// NIOSSL's default verify list advertises ML-DSA: without that the server
+    /// (unset verify sigalgs) could not verify the client's ML-DSA
+    /// CertificateVerify and the handshake would fail NO_COMMON_SIGNATURE_ALGORITHMS.
     func testMLDSA65MutualTLSHandshakeSucceeds() throws {
         let pki = TestPKI(prefix: "Trusted")
         let serverContext = try self.serverConfiguration(pki: pki, trustRoot: pki.root)
