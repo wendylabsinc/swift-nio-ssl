@@ -135,6 +135,25 @@ private final class ChannelInactiveHandler: ChannelInboundHandler, Sendable {
     }
 }
 
+private final class InputClosedRecorder: ChannelInboundHandler {
+    typealias InboundIn = ByteBuffer
+
+    private(set) var inputClosedCount = 0
+    private let onInputClosed: @Sendable () -> Void
+
+    init(onInputClosed: @escaping @Sendable () -> Void = {}) {
+        self.onInputClosed = onInputClosed
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if case .some(.inputClosed) = event as? ChannelEvent {
+            self.inputClosedCount += 1
+            self.onInputClosed()
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+}
+
 // Modified version taken from swift-nio/ChannelTests.swift
 enum ShutDownEvent {
     case input
@@ -671,17 +690,17 @@ class NIOSSLIntegrationTest: XCTestCase {
         let fileName = try makeTemporaryFile(fileExtension: ".pem")
         let tempFile = open(fileName, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
         precondition(tempFile > 1, String(cString: strerror(errno)))
-        let fileBio = CNIOBoringSSL_BIO_new_fp(fdopen(tempFile, "w+"), BIO_CLOSE)
+        let fileBio = BIO_new_fp(fdopen(tempFile, "w+"), BIO_CLOSE)
         precondition(fileBio != nil)
 
         let manager = BoringSSLPassphraseCallbackManager { closure in closure(passphrase.utf8) }
         let rc = withExtendedLifetime(manager) { manager -> CInt in
             let userData = Unmanaged.passUnretained(manager).toOpaque()
             return key.withUnsafeMutableEVPPKEYPointer { ref in
-                CNIOBoringSSL_PEM_write_bio_PrivateKey(
+                PEM_write_bio_PrivateKey(
                     fileBio,
                     ref,
-                    CNIOBoringSSL_EVP_aes_256_cbc(),
+                    EVP_aes_256_cbc(),
                     nil,
                     0,
                     globalBoringSSLPassphraseCallback,
@@ -689,7 +708,7 @@ class NIOSSLIntegrationTest: XCTestCase {
                 )
             }
         }
-        CNIOBoringSSL_BIO_free(fileBio)
+        BIO_free(fileBio)
         precondition(rc == 1)
         return fileName
     }
@@ -703,13 +722,13 @@ class NIOSSLIntegrationTest: XCTestCase {
             open(ptr, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
         }
         precondition(tempFile > 1, String(cString: strerror(errno)))
-        let fileBio = CNIOBoringSSL_BIO_new_fp(fdopen(tempFile, "w+"), BIO_CLOSE)
+        let fileBio = BIO_new_fp(fdopen(tempFile, "w+"), BIO_CLOSE)
         precondition(fileBio != nil)
 
         let rc = NIOSSLIntegrationTest.cert.withUnsafeMutableX509Pointer { ref in
-            CNIOBoringSSL_PEM_write_bio_X509(fileBio, ref)
+            PEM_write_bio_X509(fileBio, ref)
         }
-        CNIOBoringSSL_BIO_free(fileBio)
+        BIO_free(fileBio)
         precondition(rc == 1)
         return try fn(fileName)
     }
@@ -969,6 +988,199 @@ class NIOSSLIntegrationTest: XCTestCase {
         // result in full closure.
         XCTAssertNoThrow(try clientChannel.close(mode: .output).wait())
         XCTAssertNoThrow(try clientChannelInactivePromise.futureResult.wait())
+    }
+
+    func testInputClosedDuringHandshakeClosesTheChannel() throws {
+        let context = try configuredSSLContext()
+        let channel = EmbeddedChannel()
+        let errorCatcher = ErrorCatcher<NIOSSLError>()
+
+        XCTAssertNoThrow(
+            try channel.pipeline.syncOperations.addHandlers(
+                NIOSSLServerHandler(context: context),
+                errorCatcher
+            )
+        )
+        XCTAssertNoThrow(try channel.connect(to: .init(ipAddress: "1.2.3.4", port: 5)).wait())
+        XCTAssertTrue(channel.isActive)
+
+        // This is what NIO's socket channel fires on FIN when allowRemoteHalfClosure is set.
+        channel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+
+        XCTAssertEqual(errorCatcher.errors.count, 1)
+        XCTAssertEqual(errorCatcher.errors.first, .handshakeFailed(.sslError([.eofDuringHandshake])))
+        XCTAssertFalse(channel.isActive)
+
+        XCTAssertNoThrow(XCTAssertTrue(try channel.finish(acceptAlreadyClosed: true).isClean))
+    }
+
+    func testCloseOutputDuringHandshakeIsFailedWhenInputCloses() throws {
+        let context = try configuredSSLContext()
+        let channel = EmbeddedChannel()
+
+        XCTAssertNoThrow(try channel.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: context)))
+        XCTAssertNoThrow(try channel.connect(to: .init(ipAddress: "1.2.3.4", port: 5)).wait())
+
+        // Buffered until the handshake completes, which the FIN below makes impossible.
+        let closeOutput = channel.eventLoop.makePromise(of: Void.self)
+        let closeOutputResult = NIOLockedValueBox<Result<Void, Error>?>(nil)
+        closeOutput.futureResult.whenComplete { result in
+            closeOutputResult.withLockedValue { $0 = result }
+        }
+        channel.close(mode: .output, promise: closeOutput)
+
+        channel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+        channel.embeddedEventLoop.run()
+
+        guard let result = closeOutputResult.withLockedValue({ $0 }) else {
+            XCTFail("close(mode: .output) promise was never completed")
+            return
+        }
+        XCTAssertThrowsError(try result.get()) { error in
+            XCTAssertEqual(error as? NIOSSLError, .handshakeFailed(.sslError([.eofDuringHandshake])))
+        }
+    }
+
+    func testInputClosedBeforeHandshakeClosesRealSockets() throws {
+        let context = try configuredSSLContext()
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let childChannelPromise: EventLoopPromise<Channel> = group.next().makePromise()
+        let serverChannel: Channel = try ServerBootstrap(group: group)
+            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)  // Important!
+            .serverChannelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .childChannelInitializer { channel in
+                childChannelPromise.succeed(channel)
+                return channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(NIOSSLServerHandler(context: context))
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try serverChannel.close().wait())
+        }
+
+        // A plain TCP client that half-closes without sending a single TLS byte.
+        let clientChannel = try ClientBootstrap(group: group)
+            .connect(to: serverChannel.localAddress!)
+            .wait()
+        defer {
+            _ = try? clientChannel.close().wait()
+        }
+
+        let childChannel = try childChannelPromise.futureResult.wait()
+
+        // Bounded, because a plain closeFuture.wait() hangs the suite if the channel is never reaped.
+        let childChannelClosed = XCTestExpectation(description: "server reaps the half-closed connection")
+        childChannel.closeFuture.whenComplete { _ in childChannelClosed.fulfill() }
+
+        XCTAssertNoThrow(try clientChannel.close(mode: .output).wait())
+        XCTAssertEqual(XCTWaiter.wait(for: [childChannelClosed], timeout: 10.0), .completed)
+    }
+
+    func testInputClosedAfterHandshakeDoesNotCloseTheChannel() throws {
+        let serverChannel = EmbeddedChannel()
+        let clientChannel = EmbeddedChannel()
+        defer {
+            // The CloseNotify exchange has to be pumped, and both ends have TLS state left over.
+            serverChannel.close(promise: nil)
+            clientChannel.close(promise: nil)
+            _ = try? interactInMemory(clientChannel: clientChannel, serverChannel: serverChannel)
+            serverChannel.embeddedEventLoop.advanceTime(by: .hours(1))
+            clientChannel.embeddedEventLoop.advanceTime(by: .hours(1))
+            _ = try? serverChannel.finish()
+            _ = try? clientChannel.finish()
+        }
+
+        let handshakeHandler = HandshakeCompletedHandler()
+        let errorCatcher = ErrorCatcher<NIOSSLError>()
+        let inputClosedRecorder = InputClosedRecorder()
+        XCTAssertNoThrow(
+            try serverChannel.pipeline.syncOperations.addHandler(
+                NIOSSLServerHandler(context: try configuredSSLContext())
+            )
+        )
+        XCTAssertNoThrow(
+            try clientChannel.pipeline.syncOperations.addHandlers(
+                NIOSSLClientHandler(context: try configuredClientContext(), serverHostname: "localhost"),
+                handshakeHandler,
+                inputClosedRecorder,
+                errorCatcher
+            )
+        )
+
+        XCTAssertNoThrow(try connectInMemory(client: clientChannel, server: serverChannel))
+        XCTAssertNoThrow(try interactInMemory(clientChannel: clientChannel, serverChannel: serverChannel))
+        XCTAssertTrue(handshakeHandler.handshakeSucceeded)
+
+        // Half closure is legitimate once the connection is up: the rest of the pipeline owns it.
+        clientChannel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+        XCTAssertTrue(clientChannel.isActive)
+        XCTAssertEqual(inputClosedRecorder.inputClosedCount, 1)
+        XCTAssertEqual(errorCatcher.errors, [.uncleanShutdown])
+    }
+
+    func testInputClosedDuringAdditionalVerificationClosesTheChannel() throws {
+        let serverChannel = EmbeddedChannel()
+        let clientChannel = EmbeddedChannel()
+        defer {
+            // The server is still active, so its CloseNotify exchange has to be pumped.
+            serverChannel.close(promise: nil)
+            _ = try? interactInMemory(clientChannel: clientChannel, serverChannel: serverChannel)
+            serverChannel.embeddedEventLoop.advanceTime(by: .hours(1))
+            _ = try? serverChannel.finish()
+            _ = try? clientChannel.finish()
+        }
+
+        // Left unfulfilled so the client stays parked in .additionalVerification.
+        let verificationPromise = clientChannel.eventLoop.makePromise(of: Void.self)
+        let handshakeHandler = HandshakeCompletedHandler()
+        let errorCatcher = ErrorCatcher<NIOSSLError>()
+        let reentrantVerificationCompletion = InputClosedRecorder {
+            verificationPromise.succeed(())
+        }
+
+        XCTAssertNoThrow(
+            try serverChannel.pipeline.syncOperations.addHandler(
+                NIOSSLServerHandler(context: try configuredSSLContext())
+            )
+        )
+        XCTAssertNoThrow(
+            try clientChannel.pipeline.syncOperations.addHandlers(
+                NIOSSLClientHandler._makeSSLClientHandler(
+                    context: try configuredClientContext(),
+                    serverHostname: "localhost",
+                    additionalPeerCertificateVerificationCallback: { _, _ in verificationPromise.futureResult }
+                ),
+                reentrantVerificationCompletion,
+                handshakeHandler,
+                errorCatcher
+            )
+        )
+
+        XCTAssertNoThrow(try connectInMemory(client: clientChannel, server: serverChannel))
+        XCTAssertNoThrow(try interactInMemory(clientChannel: clientChannel, serverChannel: serverChannel))
+        XCTAssertFalse(handshakeHandler.handshakeSucceeded)
+
+        clientChannel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+
+        XCTAssertEqual(
+            errorCatcher.errors,
+            [.handshakeFailed(.sslError([.eofDuringAdditionalCertficiateChainValidation]))]
+        )
+        XCTAssertFalse(clientChannel.isActive)
+
+        // The downstream input-closed handler completed verification synchronously. That callback
+        // must not resurrect the handshake or trip the state machine.
+        clientChannel.embeddedEventLoop.run()
+        XCTAssertEqual(reentrantVerificationCompletion.inputClosedCount, 1)
+        XCTAssertFalse(handshakeHandler.handshakeSucceeded)
+        XCTAssertFalse(clientChannel.isActive)
     }
 
     func testCloseModeOutputTriggersFlush() throws {
@@ -1270,6 +1482,19 @@ class NIOSSLIntegrationTest: XCTestCase {
         channel.close(promise: closePromise)
 
         XCTAssertNoThrow(try closePromise.futureResult.wait())
+    }
+
+    func testPlaintextReadBufferCanHoldTwoRecords() throws {
+        let context = try configuredSSLContext()
+        let handler = try NIOSSLClientHandler(context: context, serverHostname: nil)
+        let channel = EmbeddedChannel()
+        defer {
+            XCTAssertNoThrow(try channel.finish())
+        }
+
+        try channel.pipeline.syncOperations.addHandler(handler)
+
+        XCTAssertEqual(handler._testOnly_plaintextReadBufferCapacity, 2 * SSL_MAX_RECORD_SIZE)
     }
 
     func testAddingTlsToActiveChannelStillHandshakes() throws {
@@ -3658,5 +3883,74 @@ class NIOSSLIntegrationTest: XCTestCase {
             error in
             XCTAssertEqual(error as? ChannelError, .ioOnClosedChannel)
         }
+    }
+
+    func testFlushFromErrorCaughtAfterHandshakeEOFDoesNotSpin() throws {
+        try self.assertFlushAfterHandshakeEOFDoesNotSpin(halfClosure: false)
+    }
+
+    func testFlushFromErrorCaughtAfterHandshakeHalfClosureDoesNotSpin() throws {
+        try self.assertFlushAfterHandshakeEOFDoesNotSpin(halfClosure: true)
+    }
+
+    func testFlushBeforeCloseAfterHandshakeEOFDoesNotSpin() throws {
+        try self.assertFlushAfterHandshakeEOFDoesNotSpin(halfClosure: false, closeAfterFlush: true)
+    }
+
+    private func assertFlushAfterHandshakeEOFDoesNotSpin(
+        halfClosure: Bool,
+        closeAfterFlush: Bool = false
+    ) throws {
+        final class FlushOnError: ChannelInboundHandler {
+            typealias InboundIn = ByteBuffer
+            typealias OutboundOut = ByteBuffer
+
+            private let writePromise: EventLoopPromise<Void>
+            private let closeAfterFlush: Bool
+
+            init(writePromise: EventLoopPromise<Void>, closeAfterFlush: Bool) {
+                self.writePromise = writePromise
+                self.closeAfterFlush = closeAfterFlush
+            }
+
+            func channelActive(context: ChannelHandlerContext) {
+                context.writeAndFlush(
+                    self.wrapOutboundOut(context.channel.allocator.buffer(string: "pending write")),
+                    promise: self.writePromise
+                )
+                context.fireChannelActive()
+            }
+
+            func errorCaught(context: ChannelHandlerContext, error: Error) {
+                context.flush()
+                if self.closeAfterFlush {
+                    context.close(promise: nil)
+                }
+                context.fireErrorCaught(error)
+            }
+        }
+
+        let eventLoop = EmbeddedEventLoop()
+        let writePromise = eventLoop.makePromise(of: Void.self)
+        let channel = EmbeddedChannel(
+            handlers: [
+                NIOSSLServerHandler(context: try self.configuredSSLContext()),
+                FlushOnError(writePromise: writePromise, closeAfterFlush: closeAfterFlush),
+            ],
+            loop: eventLoop
+        )
+        try channel.connect(to: .init(ipAddress: "127.0.0.1", port: 443)).wait()
+
+        if halfClosure {
+            channel.pipeline.fireUserInboundEventTriggered(ChannelEvent.inputClosed)
+        } else {
+            channel.pipeline.fireChannelInactive()
+        }
+        eventLoop.run()
+
+        XCTAssertThrowsError(try writePromise.futureResult.wait()) { error in
+            XCTAssertEqual(error as? ChannelError, .ioOnClosedChannel)
+        }
+        XCTAssertNil(try channel.readOutbound(as: ByteBuffer.self))
     }
 }

@@ -320,7 +320,7 @@ public final class NIOSSLContext {
         callbackManager: CallbackManagerProtocol?
     ) throws {
         guard boringSSLIsInitialized else { fatalError("Failed to initialize BoringSSL") }
-        guard let context = CNIOBoringSSL_SSL_CTX_new(CNIOBoringSSL_TLS_method()) else {
+        guard let context = SSL_CTX_new(TLS_method()) else {
             fatalError("Failed to create new BoringSSL context")
         }
 
@@ -335,7 +335,7 @@ public final class NIOSSLContext {
         case .tlsv1:
             minTLSVersion = TLS1_VERSION
         }
-        var returnCode = CNIOBoringSSL_SSL_CTX_set_min_proto_version(context, UInt16(minTLSVersion))
+        var returnCode = SSL_CTX_set_min_proto_version(context, UInt16(minTLSVersion))
         precondition(1 == returnCode)
 
         let maxTLSVersion: CInt
@@ -351,11 +351,11 @@ public final class NIOSSLContext {
             // Unset defaults to TLS1.3 for now. BoringSSL's default is TLS 1.2.
             maxTLSVersion = TLS1_3_VERSION
         }
-        returnCode = CNIOBoringSSL_SSL_CTX_set_max_proto_version(context, UInt16(maxTLSVersion))
+        returnCode = SSL_CTX_set_max_proto_version(context, UInt16(maxTLSVersion))
         precondition(1 == returnCode)
 
         // Cipher suites. We just pass this straight to BoringSSL.
-        returnCode = CNIOBoringSSL_SSL_CTX_set_cipher_list(context, configuration.cipherSuites)
+        returnCode = SSL_CTX_set_cipher_list(context, configuration.cipherSuites)
         precondition(1 == returnCode)
 
         // Curves list.
@@ -363,7 +363,7 @@ public final class NIOSSLContext {
         returnCode =
             groupIDs
             .withUnsafeBufferPointer { algo in
-                CNIOBoringSSL_SSL_CTX_set1_group_ids(context, algo.baseAddress, algo.count)
+                SSL_CTX_set1_group_ids(context, algo.baseAddress, algo.count)
             }
         if returnCode != 1 {
             let errorStack = BoringSSLError.buildErrorStack()
@@ -373,24 +373,24 @@ public final class NIOSSLContext {
         // Set the PSK Client Configuration callback.
         if let pskClientConfigurationsCallback = configuration._pskClientIdentityProvider {
             self.pskClientConfigurationCallback = pskClientConfigurationsCallback
-            CNIOBoringSSL_SSL_CTX_set_psk_client_callback(context, clientPSKCallback)
+            SSL_CTX_set_psk_client_callback(context, clientPSKCallback)
         }
 
         // Set the PSK Server Configuration callback.
         if let pskServerConfigurationCallback = configuration._pskServerIdentityProvider {
             self.pskServerConfigurationCallback = pskServerConfigurationCallback
-            CNIOBoringSSL_SSL_CTX_set_psk_server_callback(context, serverPSKCallback)
+            SSL_CTX_set_psk_server_callback(context, serverPSKCallback)
         }
 
         // Set the SSL Context Configuration callback.
         // The state is managed on the connection.
         if configuration.sslContextCallback != nil {
-            CNIOBoringSSL_SSL_CTX_set_cert_cb(context, sslContextCallback, nil)
+            SSL_CTX_set_cert_cb(context, sslContextCallback, nil)
         }
 
         // Set the hint no matter if it is client or server side.
         if let pskHint = configuration.pskHint {
-            CNIOBoringSSL_SSL_CTX_use_psk_identity_hint(context, pskHint)
+            SSL_CTX_use_psk_identity_hint(context, pskHint)
         }
 
         // On non-Linux platforms, when using the platform default trust roots, we make use of a
@@ -420,18 +420,28 @@ public final class NIOSSLContext {
             sendCANames: configuration.sendCANameList
         )
 
-        // Configure verification algorithms
-        if let verifySignatureAlgorithms = configuration.verifySignatureAlgorithms {
-            returnCode =
-                verifySignatureAlgorithms
-                .map { $0.rawValue }
-                .withUnsafeBufferPointer { algo in
-                    CNIOBoringSSL_SSL_CTX_set_verify_algorithm_prefs(context, algo.baseAddress, algo.count)
-                }
-            if returnCode != 1 {
-                let errorStack = BoringSSLError.buildErrorStack()
-                throw BoringSSLError.unknownError(errorStack)
+        // Configure verification algorithms.
+        //
+        // When the user has not specified a list we install our own default
+        // rather than leaving BoringSSL's built-in one in place. BoringSSL's
+        // default verify list (kVerifySignatureAlgorithms) is classical-only and
+        // omits ML-DSA, even though its signing list leads with ML-DSA. That
+        // asymmetry means a peer using an unset verify list never advertises
+        // that it is willing to verify an ML-DSA signature, so an ML-DSA
+        // CertificateVerify cannot be negotiated and the handshake fails with
+        // NO_COMMON_SIGNATURE_ALGORITHMS. Our default therefore advertises ML-DSA
+        // too. See `SignatureAlgorithm.defaultVerifyAlgorithms`.
+        let verifySignatureAlgorithms =
+            configuration.verifySignatureAlgorithms ?? SignatureAlgorithm.defaultVerifyAlgorithms
+        returnCode =
+            verifySignatureAlgorithms
+            .map { $0.rawValue }
+            .withUnsafeBufferPointer { algo in
+                SSL_CTX_set_verify_algorithm_prefs(context, algo.baseAddress, algo.count)
             }
+        if returnCode != 1 {
+            let errorStack = BoringSSLError.buildErrorStack()
+            throw BoringSSLError.unknownError(errorStack)
         }
 
         // Configure signing algorithms
@@ -440,7 +450,7 @@ public final class NIOSSLContext {
                 signingSignatureAlgorithms
                 .map { $0.rawValue }
                 .withUnsafeBufferPointer { algo in
-                    CNIOBoringSSL_SSL_CTX_set_signing_algorithm_prefs(context, algo.baseAddress, algo.count)
+                    SSL_CTX_set_signing_algorithm_prefs(context, algo.baseAddress, algo.count)
                 }
             if returnCode != 1 {
                 let errorStack = BoringSSLError.buildErrorStack()
@@ -451,11 +461,11 @@ public final class NIOSSLContext {
         // If we were given a certificate chain to use, load it and its associated private key. Before
         // we do, set up a passphrase callback if we need to.
         if let callbackManager = callbackManager {
-            CNIOBoringSSL_SSL_CTX_set_default_passwd_cb(
+            SSL_CTX_set_default_passwd_cb(
                 context,
                 { globalBoringSSLPassphraseCallback(buf: $0, size: $1, rwflag: $2, u: $3) }
             )
-            CNIOBoringSSL_SSL_CTX_set_default_passwd_cb_userdata(
+            SSL_CTX_set_default_passwd_cb_userdata(
                 context,
                 Unmanaged.passUnretained(callbackManager as AnyObject).toOpaque()
             )
@@ -529,7 +539,7 @@ public final class NIOSSLContext {
     /// Create a new connection object with the configuration from this
     /// context.
     internal func createConnection() -> SSLConnection? {
-        guard let ssl = CNIOBoringSSL_SSL_new(self.sslContext) else {
+        guard let ssl = SSL_new(self.sslContext) else {
             return nil
         }
 
@@ -571,7 +581,7 @@ public final class NIOSSLContext {
     }
 
     deinit {
-        CNIOBoringSSL_SSL_CTX_free(self.sslContext)
+        SSL_CTX_free(self.sslContext)
     }
 }
 
@@ -583,7 +593,7 @@ extension NIOSSLContext {
         // We want to take the SSL pointer and extract the parent Swift object. These force-unwraps are for
         // safety: a correct NIO program can never fail to set these pointers, and if it does failing loudly is
         // more useful than failing quietly.
-        let parentCtx = CNIOBoringSSL_SSL_get_SSL_CTX(ssl)!
+        let parentCtx = SSL_get_SSL_CTX(ssl)!
         let parentPtr = CNIOBoringSSLShims_SSL_CTX_get_app_data(parentCtx)!
         let parentSwiftContext: NIOSSLContext = Unmanaged.fromOpaque(parentPtr).takeUnretainedValue()
         return parentSwiftContext
@@ -595,7 +605,7 @@ extension NIOSSLContext {
         // This copy should be done infrequently, so we don't worry too much about it.
         let protoBuf = protocols.reduce([UInt8](), +)
         let rc = protoBuf.withUnsafeBufferPointer {
-            CNIOBoringSSL_SSL_CTX_set_alpn_protos(context, $0.baseAddress!, $0.count)
+            SSL_CTX_set_alpn_protos(context, $0.baseAddress!, $0.count)
         }
 
         // Annoyingly this function reverses the error convention: 0 is success, non-zero is failure.
@@ -608,7 +618,7 @@ extension NIOSSLContext {
     private static func setAlpnCallback(context: OpaquePointer) {
         // This extra closure here is very silly, but it exists to allow us to avoid writing down the type of the first
         // argument. Combined with the helper above, the compiler will be able to solve its way to success here.
-        CNIOBoringSSL_SSL_CTX_set_alpn_select_cb(
+        SSL_CTX_set_alpn_select_cb(
             context,
             { alpnCallback(ssl: $0, out: $1, outlen: $2, in: $3, inlen: $4, appData: $5) },
             nil
@@ -632,16 +642,16 @@ extension NIOSSLContext {
     ) throws {
         switch verificationMode {
         case .peerCertificateRequired:
-            CNIOBoringSSL_SSL_CTX_set_verify(context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nil)
+            SSL_CTX_set_verify(context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nil)
         case .peerCertificatesOptional:
-            CNIOBoringSSL_SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nil)
+            SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nil)
         }
 
         // Also, set TRUSTED_FIRST to work around dumb clients that don't know what they're doing and send
         // untrusted root certs. X509_VERIFY_PARAM will or-in the flags, so we don't need to load them first.
         // This is get0 so we can just ignore the pointer, we don't have an owned ref.
-        let trustParams = CNIOBoringSSL_SSL_CTX_get0_param(context)!
-        CNIOBoringSSL_X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_TRUSTED_FIRST))
+        let trustParams = SSL_CTX_get0_param(context)!
+        X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_TRUSTED_FIRST))
 
         func configureTrustRoots(trustRoots: NIOSSLTrustRoots) throws {
             switch trustRoots {
@@ -684,7 +694,7 @@ extension NIOSSLContext {
     private static func addCACertificateNameToList(context: OpaquePointer, certificate: NIOSSLCertificate) throws {
         // Adds the CA name extracted from cert to the list of CAs sent to the client when requesting a client certificate.
         try certificate.withUnsafeMutableX509Pointer { ref in
-            guard 1 == CNIOBoringSSL_SSL_CTX_add_client_CA(context, ref) else {
+            guard 1 == SSL_CTX_add_client_CA(context, ref) else {
                 throw NIOSSLError.failedToLoadCertificate
             }
         }
@@ -704,7 +714,7 @@ extension NIOSSLContext {
         let result = path.withCString { (pointer) -> CInt in
             let file = !isDirectory ? pointer : nil
             let directory = isDirectory ? pointer : nil
-            return CNIOBoringSSL_SSL_CTX_load_verify_locations(context, file, directory)
+            return SSL_CTX_load_verify_locations(context, file, directory)
         }
 
         if result == 0 {
@@ -713,7 +723,7 @@ extension NIOSSLContext {
         } else if sendCANames, !isDirectory {
             // For single CA file, add the CA name from the trust root.
             // This could be from a location like /etc/ssl/cert.pem as an example.
-            CNIOBoringSSL_SSL_CTX_set_client_CA_list(context, CNIOBoringSSL_SSL_load_client_CA_file(path))
+            SSL_CTX_set_client_CA_list(context, SSL_load_client_CA_file(path))
         } else if sendCANames, isDirectory {
             // Match the c_rehash directory format and load the certificate based on this criteria.
             let certificateFilePaths = try DirectoryContents(path: path).filter {
@@ -729,9 +739,9 @@ extension NIOSSLContext {
     }
 
     private static func addRootCertificate(_ cert: NIOSSLCertificate, context: OpaquePointer) throws {
-        let store = CNIOBoringSSL_SSL_CTX_get_cert_store(context)!
+        let store = SSL_CTX_get_cert_store(context)!
         let rc = cert.withUnsafeMutableX509Pointer { ref in
-            CNIOBoringSSL_X509_STORE_add_cert(store, ref)
+            X509_STORE_add_cert(store, ref)
         }
         if 0 == rc {
             throw NIOSSLError.failedToLoadCertificate
@@ -745,7 +755,7 @@ extension NIOSSLContext {
         #if os(Linux) || os(FreeBSD)
         let result = rootCAFilePath.withCString { rootCAFilePointer in
             rootCADirectoryPath.withCString { rootCADirectoryPointer in
-                CNIOBoringSSL_SSL_CTX_load_verify_locations(context, rootCAFilePointer, rootCADirectoryPointer)
+                SSL_CTX_load_verify_locations(context, rootCAFilePointer, rootCADirectoryPointer)
             }
         }
 
@@ -755,7 +765,7 @@ extension NIOSSLContext {
         }
         #elseif os(Android)
         let result = rootCADirectoryPath.withCString { rootCADirectoryPointer in
-            CNIOBoringSSL_SSL_CTX_load_verify_locations(context, nil, rootCADirectoryPointer)
+            SSL_CTX_load_verify_locations(context, nil, rootCADirectoryPointer)
         }
 
         if result == 0 {
@@ -766,7 +776,7 @@ extension NIOSSLContext {
     }
 
     private static func setKeylogCallback(context: OpaquePointer) throws {
-        CNIOBoringSSL_SSL_CTX_set_keylog_callback(context) { (ssl, linePointer) in
+        SSL_CTX_set_keylog_callback(context) { (ssl, linePointer) in
             guard let ssl = ssl, let linePointer = linePointer else {
                 return
             }
@@ -782,26 +792,38 @@ extension NIOSSLContext {
     /// Takes a path and determines if the file at this path is of c_rehash format .
     internal static func _isRehashFormat(path: String) throws -> Bool {
         // Check if the element’s name matches the c_rehash symlink name format.
-        // The links created are of the form HHHHHHHH.D, where each H is a hexadecimal character and D is a single decimal digit.
+        // `openssl rehash` writes its links with `snprintf(..., "%08x.%s%d", ...)` (apps/rehash.c):
+        // eight hex characters, a period, a type infix that is empty for certificates and "r" for
+        // CRLs, and a decimal collision id that starts at 0 and counts up for every further
+        // certificate sharing the same subject name hash. The id is a plain %d, not one character,
+        // so ".10" and beyond are ordinary names and must be recognised here.
         let utf8PathView = path.utf8
         let utf8PathSplitView = utf8PathView.split(separator: UInt8(ascii: "/"))
 
-        // Make sure the path is at least 10 units long
-        guard let lastPathComponent = utf8PathSplitView.last,
-            lastPathComponent.count == 10
-        else { return false }
-        // Split into filename parts HHHHHHHH.D -> [[HHHHHHHH], [D]]
-        let filenameParts = lastPathComponent.split(separator: UInt8(ascii: "."))
+        guard let lastPathComponent = utf8PathSplitView.last else { return false }
 
-        // Double check that the extension did not fail to cast to an integer.
-        // Make sure that the filename is an 8 character hex based file name.
+        // Split into filename parts HHHHHHHH.D -> [[HHHHHHHH], [D]].
+        //
+        // The split must keep empty subsequences. With the default (omitting) behaviour a name
+        // such as "7f44456a..0", ".7f44456a.0" or "7f44456a.0." collapses to the same two parts
+        // as "7f44456a.0" and would be accepted, even though it has a period in a position
+        // `openssl rehash` never puts one. Keeping the empty pieces makes every stray period show
+        // up in the part count or as an empty part, so the checks below can reject it.
+        let filenameParts = lastPathComponent.split(
+            separator: UInt8(ascii: "."),
+            omittingEmptySubsequences: false
+        )
+
+        // Exactly one period, an 8 character hex filename before it and at least one decimal digit
+        // after it. No separate length check on the whole name is needed: those three conditions
+        // already pin it to 8 + 1 + digits.
         guard filenameParts.count == 2,
             let filename = filenameParts.first,
             let fileExtension = filenameParts.last,
-            fileExtension.count == 1,
             filename.count == 8,
             filename.allSatisfy({ $0.isHexDigit }),
-            fileExtension.first == UInt8(ascii: "0")
+            !fileExtension.isEmpty,
+            fileExtension.allSatisfy({ $0.isDecimalDigit })
         else { return false }
 
         // Check if the element is a symlink. If it is not, return false.
@@ -815,7 +837,8 @@ extension NIOSSLContext {
         #endif
 
         // Return true at this point because the file format is considered to be in rehash format and a symlink.
-        // Rehash format being "%08lx.%d" or HHHHHHHH.D
+        // Rehash format being "%08x.%s%d" with an empty infix, or HHHHHHHH.D where D is one or
+        // more decimal digits.
         return true
     }
 }
@@ -823,10 +846,10 @@ extension NIOSSLContext {
 extension NIOSSLContext {
     /// Exposes the CA Name list count from BoringSSL's STACK_OF(X509_NAME)
     func getX509NameListCount() -> Int {
-        guard let caNameList = CNIOBoringSSL_SSL_CTX_get_client_CA_list(self.sslContext) else {
+        guard let caNameList = SSL_CTX_get_client_CA_list(self.sslContext) else {
             return 0
         }
-        return CNIOBoringSSL_sk_X509_NAME_num(caNameList)
+        return CNIOBoringSSLShims_sk_X509_NAME_num(caNameList)
     }
 }
 
@@ -848,7 +871,7 @@ extension NIOSSLContext {
     fileprivate func withStackOfCipherSuiteBuffers<Result>(
         _ body: (NIOTLSCipherBuffers?) throws -> Result
     ) rethrows -> Result {
-        guard let stackPointer = CNIOBoringSSL_SSL_CTX_get_ciphers(self.sslContext) else {
+        guard let stackPointer = SSL_CTX_get_ciphers(self.sslContext) else {
             return try body(nil)
         }
         return try body(NIOTLSCipherBuffers(basePointer: stackPointer))
@@ -904,16 +927,16 @@ extension NIOSSLContext.NIOTLSCipherBuffers: RandomAccessCollection {
     }
 
     var count: Int {
-        CNIOBoringSSL_sk_SSL_CIPHER_num(self.basePointer)
+        CNIOBoringSSLShims_sk_SSL_CIPHER_num(self.basePointer)
     }
 
     subscript(position: Index) -> NIOTLSCipher {
         precondition(position < self.endIndex)
         precondition(position >= self.startIndex)
-        guard let ptr = CNIOBoringSSL_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
+        guard let ptr = CNIOBoringSSLShims_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
             preconditionFailure("Unable to locate backing pointer.")
         }
-        let cipherID = CNIOBoringSSL_SSL_CIPHER_get_protocol_id(ptr)
+        let cipherID = SSL_CIPHER_get_protocol_id(ptr)
         return NIOTLSCipher(cipherID)
     }
 }
@@ -964,7 +987,8 @@ internal class DirectoryContents: Sequence, IteratorProtocol {
     }
 }
 
-// Used as part of the `_isRehashFormat` format to determine if the filename is a hexadecimal filename.
+// Used as part of the `_isRehashFormat` format to determine whether the filename is a hexadecimal
+// filename and whether its extension is a decimal digit.
 extension UTF8.CodeUnit {
     private static let asciiZero = UInt8(ascii: "0")
     private static let asciiNine = UInt8(ascii: "9")
@@ -978,6 +1002,15 @@ extension UTF8.CodeUnit {
         case (.asciiZero)...(.asciiNine),
             (.asciiLowercaseA)...(.asciiLowercaseF),
             (.asciiUppercaseA)...(.asciiUppercaseF):
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isDecimalDigit: Bool {
+        switch self {
+        case (.asciiZero)...(.asciiNine):
             return true
         default:
             return false
