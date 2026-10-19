@@ -417,7 +417,8 @@ public final class NIOSSLContext {
             verification: configuration.certificateVerification,
             trustRoots: configuration.trustRoots,
             additionalTrustRoots: configuration.additionalTrustRoots,
-            sendCANames: configuration.sendCANameList
+            sendCANames: configuration.sendCANameList,
+            trustRootsAreTrustAnchors: configuration.trustRootsAreTrustAnchors
         )
 
         // Configure verification algorithms.
@@ -639,6 +640,7 @@ extension NIOSSLContext {
         _ sendCANames: Bool,
         _ trustRoots: NIOSSLTrustRoots?,
         _ additionalTrustRoots: [NIOSSLAdditionalTrustRoots],
+        _ trustRootsAreTrustAnchors: Bool,
         _ verificationMode: VerificationMode
     ) throws {
         switch verificationMode {
@@ -653,6 +655,9 @@ extension NIOSSLContext {
         // This is get0 so we can just ignore the pointer, we don't have an owned ref.
         let trustParams = CNIOBoringSSL_SSL_CTX_get0_param(context)!
         CNIOBoringSSL_X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_TRUSTED_FIRST))
+        if trustRootsAreTrustAnchors {
+            CNIOBoringSSL_X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_PARTIAL_CHAIN))
+        }
 
         func configureTrustRoots(trustRoots: NIOSSLTrustRoots) throws {
             switch trustRoots {
@@ -679,15 +684,30 @@ extension NIOSSLContext {
         verification: CertificateVerification,
         trustRoots: NIOSSLTrustRoots?,
         additionalTrustRoots: [NIOSSLAdditionalTrustRoots],
-        sendCANames: Bool
+        sendCANames: Bool,
+        trustRootsAreTrustAnchors: Bool
     ) throws {
         // If validation is turned on, set the trust roots and turn on cert validation.
         switch verification {
         case .fullVerification, .noHostnameVerification:
-            try setupVerification(context, sendCANames, trustRoots, additionalTrustRoots, .peerCertificateRequired)
+            try setupVerification(
+                context,
+                sendCANames,
+                trustRoots,
+                additionalTrustRoots,
+                trustRootsAreTrustAnchors,
+                .peerCertificateRequired
+            )
         case .none(let opts):
             if opts.validatePresentedCertificates {
-                try setupVerification(context, sendCANames, trustRoots, additionalTrustRoots, .peerCertificatesOptional)
+                try setupVerification(
+                    context,
+                    sendCANames,
+                    trustRoots,
+                    additionalTrustRoots,
+                    trustRootsAreTrustAnchors,
+                    .peerCertificatesOptional
+                )
             }
         }
     }

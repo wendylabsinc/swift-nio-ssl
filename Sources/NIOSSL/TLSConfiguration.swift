@@ -501,6 +501,15 @@ public struct TLSConfiguration {
     /// This instructs the client which identities can be used by evaluating what CA the identity certificate was issued from.
     public var sendCANameList: Bool
 
+    /// Whether every certificate in ``trustRoots`` and ``additionalTrustRoots`` is a trust anchor.
+    ///
+    /// By default BoringSSL builds the chain up to a self-signed root, so a trusted intermediate
+    /// whose own issuer is absent cannot anchor verification. Setting this enables
+    /// `X509_V_FLAG_PARTIAL_CHAIN`: a peer chain that reaches any trusted certificate verifies,
+    /// with every other check unchanged. Use it only when the trusted certificates are themselves
+    /// the intended anchors, such as a PKI chain delivered with the caller's own certificate.
+    public var trustRootsAreTrustAnchors: Bool = false
+
     private init(
         cipherSuiteValues: [NIOTLSCipher] = [],
         cipherSuites: String = defaultCipherSuites,
@@ -590,7 +599,9 @@ extension TLSConfiguration {
             && self.encodedApplicationProtocols == comparing.encodedApplicationProtocols
             && self.shutdownTimeout == comparing.shutdownTimeout && isKeyLoggerCallbacksEqual
             && self.renegotiationSupport == comparing.renegotiationSupport
-            && self.sendCANameList == comparing.sendCANameList && isSSLContextCallbackEqual && isPSKClientProviderEqual
+            && self.sendCANameList == comparing.sendCANameList
+            && self.trustRootsAreTrustAnchors == comparing.trustRootsAreTrustAnchors
+            && isSSLContextCallbackEqual && isPSKClientProviderEqual
             && isPSKServerProviderEqual && self.pskHint == comparing.pskHint
     }
 
@@ -618,6 +629,7 @@ extension TLSConfiguration {
         }
         hasher.combine(renegotiationSupport)
         hasher.combine(sendCANameList)
+        hasher.combine(trustRootsAreTrustAnchors)
         withUnsafeBytes(of: _pskClientIdentityProvider) { closureClientBits in
             hasher.combine(bytes: closureClientBits)
         }

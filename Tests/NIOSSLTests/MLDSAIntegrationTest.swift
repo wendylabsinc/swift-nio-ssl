@@ -194,10 +194,15 @@ final class MLDSAIntegrationTest: XCTestCase {
         return try NIOSSLContext(configuration: config)
     }
 
-    private func clientConfiguration(pki: TestPKI, trustRoot: NIOSSLCertificate) throws -> NIOSSLContext {
+    private func clientConfiguration(
+        pki: TestPKI,
+        trustRoot: NIOSSLCertificate,
+        trustRootsAreTrustAnchors: Bool = false
+    ) throws -> NIOSSLContext {
         var config = TLSConfiguration.makeClientConfiguration()
         config.certificateVerification = .noHostnameVerification
         config.trustRoots = .certificates([trustRoot])
+        config.trustRootsAreTrustAnchors = trustRootsAreTrustAnchors
         config.certificateChain = [.certificate(pki.clientLeaf), .certificate(pki.intermediate)]
         config.privateKey = .privateKey(NIOSSLPrivateKey.fromUnsafePointer(takingOwnership: pki.clientKey))
         // Deliberately leave `verifySignatureAlgorithms` unset.
@@ -320,5 +325,61 @@ final class MLDSAIntegrationTest: XCTestCase {
         XCTAssertNoThrow(try b2b.connectInMemory())
         XCTAssertTrue(clientHandshake.handshakeSucceeded)
         XCTAssertTrue(serverHandshake.handshakeSucceeded)
+    }
+
+    /// The client trusts only the intermediate, not the self-signed root above it. By default
+    /// BoringSSL still needs the root, so the server's otherwise valid chain is refused.
+    func testTrustedIntermediateIsNotAnAnchorByDefault() throws {
+        let pki = TestPKI(prefix: "Partial")
+        let serverContext = try self.serverConfiguration(pki: pki, trustRoot: pki.root)
+        let clientContext = try self.clientConfiguration(pki: pki, trustRoot: pki.intermediate)
+
+        XCTAssertThrowsError(try self.handshake(client: clientContext, server: serverContext)) { error in
+            guard case .some(.handshakeFailed) = error as? NIOSSLError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    /// With `trustRootsAreTrustAnchors`, the trusted intermediate anchors the same chain.
+    func testTrustedIntermediateAnchorsWhenTrustRootsAreTrustAnchors() throws {
+        let pki = TestPKI(prefix: "Partial")
+        let serverContext = try self.serverConfiguration(pki: pki, trustRoot: pki.root)
+        let clientContext = try self.clientConfiguration(
+            pki: pki,
+            trustRoot: pki.intermediate,
+            trustRootsAreTrustAnchors: true
+        )
+
+        XCTAssertNoThrow(try self.handshake(client: clientContext, server: serverContext))
+    }
+
+    /// Anchoring at a trusted intermediate does not accept a chain from anywhere else.
+    func testTrustRootsAreTrustAnchorsStillRejectsAnotherChain() throws {
+        let trustedPKI = TestPKI(prefix: "Partial")
+        let attackerPKI = TestPKI(prefix: "Attacker")
+        let serverContext = try self.serverConfiguration(pki: attackerPKI, trustRoot: trustedPKI.root)
+        let clientContext = try self.clientConfiguration(
+            pki: trustedPKI,
+            trustRoot: trustedPKI.intermediate,
+            trustRootsAreTrustAnchors: true
+        )
+
+        XCTAssertThrowsError(try self.handshake(client: clientContext, server: serverContext)) { error in
+            guard case .some(.handshakeFailed) = error as? NIOSSLError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    private func handshake(client: NIOSSLContext, server: NIOSSLContext) throws {
+        let b2b = BackToBackEmbeddedChannel()
+        try b2b.client.pipeline.syncOperations.addHandlers([
+            try NIOSSLClientHandler(context: client, serverHostname: "localhost")
+        ])
+        try b2b.server.pipeline.syncOperations.addHandlers([
+            NIOSSLServerHandler(context: server)
+        ])
+        try b2b.connectInMemory()
     }
 }
