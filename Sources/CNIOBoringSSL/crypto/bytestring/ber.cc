@@ -1,16 +1,16 @@
-/* Copyright 2014 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_bytestring.h>
 
@@ -19,6 +19,8 @@
 
 #include "internal.h"
 
+
+using namespace bssl;
 
 // kMaxDepth limits the recursion depth to avoid overflowing the stack.
 static const uint32_t kMaxDepth = 128;
@@ -128,7 +130,7 @@ static int cbs_convert_ber(CBS *in, CBB *out, CBS_ASN1_TAG string_tag,
     int indefinite;
     CBB *out_contents, out_contents_storage;
     if (!CBS_get_any_ber_asn1_element(in, &contents, &tag, &header_len,
-                                      /*out_ber_found=*/NULL, &indefinite)) {
+                                      /*out_ber_found=*/nullptr, &indefinite)) {
       return 0;
     }
 
@@ -189,7 +191,7 @@ static int cbs_convert_ber(CBS *in, CBB *out, CBS_ASN1_TAG string_tag,
   return looking_for_eoc == 0;
 }
 
-int CBS_asn1_ber_to_der(CBS *in, CBS *out, uint8_t **out_storage) {
+int bssl::CBS_asn1_ber_to_der(CBS *in, CBS *out, uint8_t **out_storage) {
   CBB cbb;
 
   // First, do a quick walk to find any indefinite-length elements. Most of the
@@ -200,10 +202,10 @@ int CBS_asn1_ber_to_der(CBS *in, CBS *out, uint8_t **out_storage) {
   }
 
   if (!conversion_needed) {
-    if (!CBS_get_any_asn1_element(in, out, NULL, NULL)) {
+    if (!CBS_get_any_asn1_element(in, out, nullptr, nullptr)) {
       return 0;
     }
-    *out_storage = NULL;
+    *out_storage = nullptr;
     return 1;
   }
 
@@ -219,16 +221,16 @@ int CBS_asn1_ber_to_der(CBS *in, CBS *out, uint8_t **out_storage) {
   return 1;
 }
 
-int CBS_get_asn1_implicit_string(CBS *in, CBS *out, uint8_t **out_storage,
-                                 CBS_ASN1_TAG outer_tag,
-                                 CBS_ASN1_TAG inner_tag) {
+int bssl::CBS_get_asn1_implicit_string(CBS *in, CBS *out, uint8_t **out_storage,
+                                       CBS_ASN1_TAG outer_tag,
+                                       CBS_ASN1_TAG inner_tag) {
   assert(!(outer_tag & CBS_ASN1_CONSTRUCTED));
   assert(!(inner_tag & CBS_ASN1_CONSTRUCTED));
   assert(is_string_type(inner_tag));
 
   if (CBS_peek_asn1_tag(in, outer_tag)) {
     // Normal implicitly-tagged string.
-    *out_storage = NULL;
+    *out_storage = nullptr;
     return CBS_get_asn1(in, out, outer_tag);
   }
 

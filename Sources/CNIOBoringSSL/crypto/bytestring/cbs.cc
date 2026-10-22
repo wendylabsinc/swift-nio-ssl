@@ -1,16 +1,16 @@
-/* Copyright 2014 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_asn1.h>
 #include <CNIOBoringSSL_bytestring.h>
@@ -25,6 +25,8 @@
 #include "../internal.h"
 #include "internal.h"
 
+
+using namespace bssl;
 
 static int cbs_get(CBS *cbs, const uint8_t **p, size_t n) {
   if (cbs->len < n) {
@@ -44,14 +46,14 @@ int CBS_skip(CBS *cbs, size_t len) {
 
 int CBS_stow(const CBS *cbs, uint8_t **out_ptr, size_t *out_len) {
   OPENSSL_free(*out_ptr);
-  *out_ptr = NULL;
+  *out_ptr = nullptr;
   *out_len = 0;
 
   if (cbs->len == 0) {
     return 1;
   }
   *out_ptr = reinterpret_cast<uint8_t *>(OPENSSL_memdup(cbs->data, cbs->len));
-  if (*out_ptr == NULL) {
+  if (*out_ptr == nullptr) {
     return 0;
   }
   *out_len = cbs->len;
@@ -59,15 +61,15 @@ int CBS_stow(const CBS *cbs, uint8_t **out_ptr, size_t *out_len) {
 }
 
 int CBS_strdup(const CBS *cbs, char **out_ptr) {
-  if (*out_ptr != NULL) {
+  if (*out_ptr != nullptr) {
     OPENSSL_free(*out_ptr);
   }
   *out_ptr = OPENSSL_strndup((const char *)cbs->data, cbs->len);
-  return (*out_ptr != NULL);
+  return (*out_ptr != nullptr);
 }
 
 int CBS_contains_zero_byte(const CBS *cbs) {
-  return OPENSSL_memchr(cbs->data, 0, cbs->len) != NULL;
+  return OPENSSL_memchr(cbs->data, 0, cbs->len) != nullptr;
 }
 
 int CBS_mem_equal(const CBS *cbs, const uint8_t *data, size_t len) {
@@ -207,7 +209,7 @@ int CBS_get_u24_length_prefixed(CBS *cbs, CBS *out) {
 int CBS_get_until_first(CBS *cbs, CBS *out, uint8_t c) {
   const uint8_t *split = reinterpret_cast<const uint8_t *>(
       OPENSSL_memchr(CBS_data(cbs), c, CBS_len(cbs)));
-  if (split == NULL) {
+  if (split == nullptr) {
     return 0;
   }
   return CBS_get_bytes(cbs, out, split - CBS_data(cbs));
@@ -309,22 +311,22 @@ static int cbs_get_any_asn1_element(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag,
   CBS header = *cbs;
   CBS throwaway;
 
-  if (out == NULL) {
+  if (out == nullptr) {
     out = &throwaway;
   }
   if (ber_ok) {
     *out_ber_found = 0;
     *out_indefinite = 0;
   } else {
-    assert(out_ber_found == NULL);
-    assert(out_indefinite == NULL);
+    assert(out_ber_found == nullptr);
+    assert(out_indefinite == nullptr);
   }
 
   CBS_ASN1_TAG tag;
   if (!parse_asn1_tag(&header, &tag)) {
     return 0;
   }
-  if (out_tag != NULL) {
+  if (out_tag != nullptr) {
     *out_tag = tag;
   }
 
@@ -341,7 +343,7 @@ static int cbs_get_any_asn1_element(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag,
   if ((length_byte & 0x80) == 0) {
     // Short form length.
     len = ((size_t)length_byte) + header_len;
-    if (out_header_len != NULL) {
+    if (out_header_len != nullptr) {
       *out_header_len = header_len;
     }
   } else {
@@ -353,7 +355,7 @@ static int cbs_get_any_asn1_element(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag,
 
     if (ber_ok && (tag & CBS_ASN1_CONSTRUCTED) != 0 && num_bytes == 0) {
       // indefinite length
-      if (out_header_len != NULL) {
+      if (out_header_len != nullptr) {
         *out_header_len = header_len;
       }
       *out_ber_found = 1;
@@ -396,7 +398,7 @@ static int cbs_get_any_asn1_element(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag,
       return 0;
     }
     len += header_len + num_bytes;
-    if (out_header_len != NULL) {
+    if (out_header_len != nullptr) {
       *out_header_len = header_len + num_bytes;
     }
   }
@@ -410,7 +412,7 @@ int CBS_get_any_asn1(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag) {
     return 0;
   }
 
-  if (!CBS_skip(out, header_len)) {
+  if (out && !CBS_skip(out, header_len)) {
     assert(0);
     return 0;
   }
@@ -420,7 +422,8 @@ int CBS_get_any_asn1(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag) {
 
 int CBS_get_any_asn1_element(CBS *cbs, CBS *out, CBS_ASN1_TAG *out_tag,
                              size_t *out_header_len) {
-  return cbs_get_any_asn1_element(cbs, out, out_tag, out_header_len, NULL, NULL,
+  return cbs_get_any_asn1_element(cbs, out, out_tag, out_header_len, nullptr,
+                                  nullptr,
                                   /*ber_ok=*/0);
 }
 
@@ -440,7 +443,7 @@ static int cbs_get_asn1(CBS *cbs, CBS *out, CBS_ASN1_TAG tag_value,
   CBS_ASN1_TAG tag;
   CBS throwaway;
 
-  if (out == NULL) {
+  if (out == nullptr) {
     out = &throwaway;
   }
 
@@ -472,8 +475,12 @@ int CBS_peek_asn1_tag(const CBS *cbs, CBS_ASN1_TAG tag_value) {
 }
 
 int CBS_get_asn1_uint64(CBS *cbs, uint64_t *out) {
+  return CBS_get_asn1_uint64_with_tag(cbs, out, CBS_ASN1_INTEGER);
+}
+
+int CBS_get_asn1_uint64_with_tag(CBS *cbs, uint64_t *out, CBS_ASN1_TAG tag) {
   CBS bytes;
-  if (!CBS_get_asn1(cbs, &bytes, CBS_ASN1_INTEGER) ||
+  if (!CBS_get_asn1(cbs, &bytes, tag) ||
       !CBS_is_unsigned_asn1_integer(&bytes)) {
     return 0;
   }
@@ -494,9 +501,13 @@ int CBS_get_asn1_uint64(CBS *cbs, uint64_t *out) {
 }
 
 int CBS_get_asn1_int64(CBS *cbs, int64_t *out) {
+  return CBS_get_asn1_int64_with_tag(cbs, out, CBS_ASN1_INTEGER);
+}
+
+int CBS_get_asn1_int64_with_tag(CBS *cbs, int64_t *out, CBS_ASN1_TAG tag) {
   int is_negative;
   CBS bytes;
-  if (!CBS_get_asn1(cbs, &bytes, CBS_ASN1_INTEGER) ||
+  if (!CBS_get_asn1(cbs, &bytes, tag) ||
       !CBS_is_valid_asn1_integer(&bytes, &is_negative)) {
     return 0;
   }
@@ -538,7 +549,7 @@ int CBS_get_optional_asn1(CBS *cbs, CBS *out, int *out_present,
     present = 1;
   }
 
-  if (out_present != NULL) {
+  if (out_present != nullptr) {
     *out_present = present;
   }
 
@@ -559,7 +570,7 @@ int CBS_get_optional_asn1_octet_string(CBS *cbs, CBS *out, int *out_present,
       return 0;
     }
   } else {
-    CBS_init(out, NULL, 0);
+    CBS_init(out, nullptr, 0);
   }
   if (out_present) {
     *out_present = present;
@@ -655,7 +666,7 @@ int CBS_is_valid_asn1_integer(const CBS *cbs, int *out_is_negative) {
   if (!CBS_get_u8(&copy, &first_byte)) {
     return 0;  // INTEGERs may not be empty.
   }
-  if (out_is_negative != NULL) {
+  if (out_is_negative != nullptr) {
     *out_is_negative = (first_byte & 0x80) != 0;
   }
   if (!CBS_get_u8(&copy, &second_byte)) {
@@ -742,7 +753,40 @@ char *CBS_asn1_oid_to_text(const CBS *cbs) {
 
 err:
   CBB_cleanup(&cbb);
-  return NULL;
+  return nullptr;
+}
+
+int CBS_is_valid_asn1_relative_oid(const CBS *cbs) {
+  return CBS_is_valid_asn1_oid(cbs);
+}
+
+char *CBS_asn1_relative_oid_to_text(const CBS *cbs) {
+  CBS copy = *cbs;
+  ScopedCBB cbb;
+  if (!CBB_init(cbb.get(), 32)) {
+    return nullptr;
+  }
+
+  // Relative OIDs must have at least one component.
+  uint64_t v;
+  if (!parse_base128_integer(&copy, &v) || !add_decimal(cbb.get(), v)) {
+    return nullptr;
+  }
+
+  while (CBS_len(&copy) != 0) {
+    if (!parse_base128_integer(&copy, &v) || !CBB_add_u8(cbb.get(), '.') ||
+        !add_decimal(cbb.get(), v)) {
+      return nullptr;
+    }
+  }
+
+  uint8_t *txt;
+  size_t txt_len;
+  if (!CBB_add_u8(cbb.get(), '\0') || !CBB_finish(cbb.get(), &txt, &txt_len)) {
+    return nullptr;
+  }
+
+  return reinterpret_cast<char *>(txt);
 }
 
 static int cbs_get_two_digits(CBS *cbs, int *out) {
@@ -878,7 +922,7 @@ static int CBS_parse_rfc5280_time_internal(const CBS *cbs, int is_gentime,
     return 0;  // Reject invalid lengths.
   }
 
-  if (out_tm != NULL) {
+  if (out_tm != nullptr) {
     // Fill in the tm fields corresponding to what we validated.
     out_tm->tm_year = year - 1900;
     out_tm->tm_mon = month - 1;

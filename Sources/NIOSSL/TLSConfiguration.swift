@@ -266,6 +266,37 @@ public struct SignatureAlgorithm: RawRepresentable, Hashable, Sendable {
     public static let rsaPssRsaeSha384 = SignatureAlgorithm(rawValue: 0x0805)
     public static let rsaPssRsaeSha512 = SignatureAlgorithm(rawValue: 0x0806)
     public static let ed25519 = SignatureAlgorithm(rawValue: 0x0807)
+    public static let mldsa44 = SignatureAlgorithm(rawValue: 0x0904)
+    public static let mldsa65 = SignatureAlgorithm(rawValue: 0x0905)
+    public static let mldsa87 = SignatureAlgorithm(rawValue: 0x0906)
+}
+
+extension SignatureAlgorithm {
+    /// The signature algorithms NIOSSL advertises and accepts for verification
+    /// when the user has not set `TLSConfiguration/verifySignatureAlgorithms`.
+    ///
+    /// The classical entries mirror BoringSSL's built-in default verify list
+    /// (`kVerifySignatureAlgorithms`), in the same order, so classical
+    /// negotiation is unchanged. ML-DSA is then additionally advertised: this
+    /// vendored BoringSSL leads its *signing* defaults with ML-DSA but omits it
+    /// from the *verify* defaults, so without this a peer would never offer to
+    /// verify an ML-DSA signature and the handshake would fail with
+    /// NO_COMMON_SIGNATURE_ALGORITHMS. Users can still narrow the set by setting
+    /// `verifySignatureAlgorithms` explicitly.
+    internal static let defaultVerifyAlgorithms: [SignatureAlgorithm] = [
+        .ecdsaSecp256R1Sha256,
+        .rsaPssRsaeSha256,
+        .rsaPkcs1Sha256,
+        .ecdsaSecp384R1Sha384,
+        .rsaPssRsaeSha384,
+        .rsaPkcs1Sha384,
+        .rsaPssRsaeSha512,
+        .rsaPkcs1Sha512,
+        .rsaPkcs1Sha1,
+        .mldsa44,
+        .mldsa65,
+        .mldsa87,
+    ]
 }
 
 /// A secure default configuration of cipher suites for TLS 1.2 and earlier.
@@ -470,6 +501,15 @@ public struct TLSConfiguration {
     /// This instructs the client which identities can be used by evaluating what CA the identity certificate was issued from.
     public var sendCANameList: Bool
 
+    /// Whether every certificate in ``trustRoots`` and ``additionalTrustRoots`` is a trust anchor.
+    ///
+    /// By default BoringSSL builds the chain up to a self-signed root, so a trusted intermediate
+    /// whose own issuer is absent cannot anchor verification. Setting this enables
+    /// `X509_V_FLAG_PARTIAL_CHAIN`: a peer chain that reaches any trusted certificate verifies,
+    /// with every other check unchanged. Use it only when the trusted certificates are themselves
+    /// the intended anchors, such as a PKI chain delivered with the caller's own certificate.
+    public var trustRootsAreTrustAnchors: Bool = false
+
     private init(
         cipherSuiteValues: [NIOTLSCipher] = [],
         cipherSuites: String = defaultCipherSuites,
@@ -559,7 +599,9 @@ extension TLSConfiguration {
             && self.encodedApplicationProtocols == comparing.encodedApplicationProtocols
             && self.shutdownTimeout == comparing.shutdownTimeout && isKeyLoggerCallbacksEqual
             && self.renegotiationSupport == comparing.renegotiationSupport
-            && self.sendCANameList == comparing.sendCANameList && isSSLContextCallbackEqual && isPSKClientProviderEqual
+            && self.sendCANameList == comparing.sendCANameList
+            && self.trustRootsAreTrustAnchors == comparing.trustRootsAreTrustAnchors
+            && isSSLContextCallbackEqual && isPSKClientProviderEqual
             && isPSKServerProviderEqual && self.pskHint == comparing.pskHint
     }
 
@@ -587,6 +629,7 @@ extension TLSConfiguration {
         }
         hasher.combine(renegotiationSupport)
         hasher.combine(sendCANameList)
+        hasher.combine(trustRootsAreTrustAnchors)
         withUnsafeBytes(of: _pskClientIdentityProvider) { closureClientBits in
             hasher.combine(bytes: closureClientBits)
         }

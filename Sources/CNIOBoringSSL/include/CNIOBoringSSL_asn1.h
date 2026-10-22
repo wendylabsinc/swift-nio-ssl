@@ -1,16 +1,21 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_ASN1_H
 #define OPENSSL_HEADER_ASN1_H
 
-#include "CNIOBoringSSL_base.h"
+#include "CNIOBoringSSL_base.h"   // IWYU pragma: export
 
 #include <time.h>
 
@@ -123,21 +128,13 @@ extern "C" {
 #define B_ASN1_OCTET_STRING 0x0200
 #define B_ASN1_BIT_STRING 0x0400
 #define B_ASN1_BMPSTRING 0x0800
-#define B_ASN1_UNKNOWN 0x1000
 #define B_ASN1_UTF8STRING 0x2000
 #define B_ASN1_UTCTIME 0x4000
 #define B_ASN1_GENERALIZEDTIME 0x8000
 #define B_ASN1_SEQUENCE 0x10000
 
 // ASN1_tag2bit converts |tag| from the tag number of a universal type to a
-// corresponding |B_ASN1_*| constant, |B_ASN1_UNKNOWN|, or zero. If the
-// |B_ASN1_*| constant above is defined, it will map the corresponding
-// |V_ASN1_*| constant to it. Otherwise, whether it returns |B_ASN1_UNKNOWN| or
-// zero is ill-defined and callers should not rely on it.
-//
-// TODO(https://crbug.com/boringssl/412): Figure out what |B_ASN1_UNNOWN| vs
-// zero is meant to be. The main impact is what values go in |B_ASN1_PRINTABLE|.
-// To that end, we must return zero on types that can't go in |ASN1_STRING|.
+// corresponding |B_ASN1_*| constant, or zero if |tag| has no bitmask.
 OPENSSL_EXPORT unsigned long ASN1_tag2bit(int tag);
 
 // ASN1_tag2str returns a string representation of |tag|, interpret as a tag
@@ -334,8 +331,10 @@ OPENSSL_EXPORT void *ASN1_item_d2i_bio(const ASN1_ITEM *it, BIO *in, void *out);
 //
 // These functions may not be used with |ASN1_ITEM|s whose C type is
 // |ASN1_BOOLEAN|.
-OPENSSL_EXPORT int ASN1_item_i2d_fp(const ASN1_ITEM *it, FILE *out, void *in);
-OPENSSL_EXPORT int ASN1_item_i2d_bio(const ASN1_ITEM *it, BIO *out, void *in);
+OPENSSL_EXPORT int ASN1_item_i2d_fp(const ASN1_ITEM *it, FILE *out,
+                                    const void *in);
+OPENSSL_EXPORT int ASN1_item_i2d_bio(const ASN1_ITEM *it, BIO *out,
+                                     const void *in);
 
 // ASN1_item_unpack parses |oct|'s contents as |it|'s ASN.1 type. It returns a
 // newly-allocated instance of |it|'s C type on success, or NULL on error.
@@ -489,12 +488,6 @@ struct asn1_string_st {
   long flags;
 };
 
-// ASN1_STRING_FLAG_BITS_LEFT indicates, in a BIT STRING |ASN1_STRING|, that
-// flags & 0x7 contains the number of padding bits added to the BIT STRING
-// value. When not set, all trailing zero bits in the last byte are implicitly
-// treated as padding. This behavior is deprecated and should not be used.
-#define ASN1_STRING_FLAG_BITS_LEFT 0x08
-
 // ASN1_STRING_type_new returns a newly-allocated empty |ASN1_STRING| object of
 // type |type|, or NULL on error.
 OPENSSL_EXPORT ASN1_STRING *ASN1_STRING_type_new(int type);
@@ -562,12 +555,20 @@ OPENSSL_EXPORT int ASN1_STRING_cmp(const ASN1_STRING *a, const ASN1_STRING *b);
 // |data|. It returns one on success and zero on error. If |data| is NULL, it
 // updates the length and allocates the buffer as needed, but does not
 // initialize the contents.
+//
+// If |str| is a BIT STRING, this function sets the number of unused bits to
+// zero. |ASN1_BIT_STRING_set1| may be used to set a BIT STRING that is not a
+// whole number of bytes.
 OPENSSL_EXPORT int ASN1_STRING_set(ASN1_STRING *str, const void *data,
                                    ossl_ssize_t len);
 
 // ASN1_STRING_set0 sets the contents of |str| to |len| bytes from |data|. It
 // takes ownership of |data|, which must have been allocated with
 // |OPENSSL_malloc|.
+//
+// If |str| is a BIT STRING, this function sets the number of unused bits to
+// zero. |ASN1_BIT_STRING_set1| may be used to set a BIT STRING that is not a
+// whole number of bytes.
 OPENSSL_EXPORT void ASN1_STRING_set0(ASN1_STRING *str, void *data, int len);
 
 // The following functions call |ASN1_STRING_type_new| with the corresponding
@@ -721,7 +722,10 @@ OPENSSL_EXPORT int ASN1_mbstring_ncopy(ASN1_STRING **out, const uint8_t *in,
 // |mask|, |minsize|, and |maxsize| based on |nid|. When |nid| is a recognized
 // X.509 attribute type, it will pick a suitable ASN.1 string type and bounds.
 // For most attribute types, it preferentially chooses UTF8String. If |nid| is
-// unrecognized, it uses UTF8String by default.
+// unrecognized, it uses UTF8String by default. This function will also enforce
+// any known attribute-specific constraints on the sizes of the string and fail
+// if the size is invalid. In RFC 5280, these bounds are specified by
+// constraints like "SIZE (1..ub-common-name)" in ASN.1.
 //
 // Slightly unlike |ASN1_mbstring_ncopy|, this function interprets |out| and
 // returns its result as follows: If |out| is NULL, it returns a newly-allocated
@@ -755,7 +759,7 @@ OPENSSL_EXPORT ASN1_STRING *ASN1_STRING_set_by_NID(ASN1_STRING **out,
 //
 // WARNING: This function affects global state in the library. If two libraries
 // in the same address space register information for the same OID, one call
-// will fail. Prefer directly passing the desired parametrs to
+// will fail. Prefer directly passing the desired parameters to
 // |ASN1_mbstring_copy| or |ASN1_mbstring_ncopy| instead.
 OPENSSL_EXPORT int ASN1_STRING_TABLE_add(int nid, long minsize, long maxsize,
                                          unsigned long mask,
@@ -800,10 +804,6 @@ OPENSSL_EXPORT ASN1_STRING *d2i_DIRECTORYSTRING(ASN1_STRING **out,
 // 5280), as described in |i2d_SAMPLE|.
 OPENSSL_EXPORT int i2d_DIRECTORYSTRING(const ASN1_STRING *in, uint8_t **outp);
 
-// DIRECTORYSTRING is an |ASN1_ITEM| whose ASN.1 type is X.509 DirectoryString
-// (RFC 5280) and C type is |ASN1_STRING*|.
-DECLARE_ASN1_ITEM(DIRECTORYSTRING)
-
 // B_ASN1_DISPLAYTEXT is a bitmask of types allowed in an X.509 DisplayText (RFC
 // 5280).
 #define B_ASN1_DISPLAYTEXT                                      \
@@ -833,10 +833,6 @@ OPENSSL_EXPORT ASN1_STRING *d2i_DISPLAYTEXT(ASN1_STRING **out,
 // as described in |i2d_SAMPLE|.
 OPENSSL_EXPORT int i2d_DISPLAYTEXT(const ASN1_STRING *in, uint8_t **outp);
 
-// DISPLAYTEXT is an |ASN1_ITEM| whose ASN.1 type is X.509 DisplayText (RFC
-// 5280) and C type is |ASN1_STRING*|.
-DECLARE_ASN1_ITEM(DISPLAYTEXT)
-
 
 // Bit strings.
 //
@@ -864,14 +860,10 @@ DECLARE_ASN1_ITEM(DISPLAYTEXT)
 // This library represents BIT STRINGs as |ASN1_STRING|s with type
 // |V_ASN1_BIT_STRING|. The data contains the encoded form of the BIT STRING,
 // including any padding bits added to round to a whole number of bytes, but
-// excluding the leading byte containing the number of padding bits. If
-// |ASN1_STRING_FLAG_BITS_LEFT| is set, the bottom three bits contains the
-// number of padding bits. For example, DER encodes the BIT STRING {1, 0} as
-// {0x06, 0x80 = 0b10_000000}. The |ASN1_STRING| representation has data of
-// {0x80} and flags of ASN1_STRING_FLAG_BITS_LEFT | 6. If
-// |ASN1_STRING_FLAG_BITS_LEFT| is unset, trailing zero bits are implicitly
-// removed. Callers should not rely this representation when constructing bit
-// strings. The padding bits in the |ASN1_STRING| data must be zero.
+// excluding the leading byte containing the number of padding bits. Instead,
+// the bottom three bits of |flags| contain the number of padding bits. For
+// example, DER encodes the BIT STRING {1, 0} as {0x06, 0x80 = 0b10_000000}. The
+// |ASN1_STRING| representation has data of {0x80} and flags of 6.
 
 // ASN1_BIT_STRING_new calls |ASN1_STRING_type_new| with |V_ASN1_BIT_STRING|.
 OPENSSL_EXPORT ASN1_BIT_STRING *ASN1_BIT_STRING_new(void);
@@ -917,27 +909,27 @@ OPENSSL_EXPORT int i2c_ASN1_BIT_STRING(const ASN1_BIT_STRING *in,
 // |ASN1_BIT_STRING*|.
 DECLARE_ASN1_ITEM(ASN1_BIT_STRING)
 
-// ASN1_BIT_STRING_num_bytes computes the length of |str| in bytes. If |str|'s
-// bit length is a multiple of 8, it sets |*out| to the byte length and returns
-// one. Otherwise, it returns zero.
-//
-// This function may be used with |ASN1_STRING_get0_data| to interpret |str| as
-// a byte string.
-OPENSSL_EXPORT int ASN1_BIT_STRING_num_bytes(const ASN1_BIT_STRING *str,
-                                             size_t *out);
+// ASN1_BIT_STRING_unused_bits returns the number of unused bits in the last
+// byte of |str|. If |str| is empty (i.e. |ASN1_STRING_length| is zero), this
+// always returns zero. Otherwise it returns a number between 0 and 7.
+OPENSSL_EXPORT uint8_t ASN1_BIT_STRING_unused_bits(const ASN1_BIT_STRING *str);
 
-// ASN1_BIT_STRING_set calls |ASN1_STRING_set|. It leaves flags unchanged, so
-// the caller must set the number of unused bits.
-//
-// TODO(davidben): Maybe it should? Wrapping a byte string in a bit string is a
-// common use case.
-OPENSSL_EXPORT int ASN1_BIT_STRING_set(ASN1_BIT_STRING *str,
-                                       const unsigned char *d,
+// ASN1_BIT_STRING_set calls |ASN1_STRING_set|.
+OPENSSL_EXPORT int ASN1_BIT_STRING_set(ASN1_BIT_STRING *str, const uint8_t *data,
                                        ossl_ssize_t length);
+
+// ASN1_BIT_STRING_set1 sets |str| to a BIT STRING containing |length| bytes
+// from |data|. It returns one on success and zero on error. The least
+// significant |unused_bits| of the last byte of |data| are removed from the bit
+// string. The removed bits must all be zero. |unused_bits| must be between 0
+// and 7, and must be 0 if |length| is zero.
+OPENSSL_EXPORT int ASN1_BIT_STRING_set1(ASN1_BIT_STRING *str,
+                                        const uint8_t *data, size_t length,
+                                        int unused_bits);
 
 // ASN1_BIT_STRING_set_bit sets bit |n| of |str| to one if |value| is non-zero
 // and zero if |value| is zero, resizing |str| as needed. It then truncates
-// trailing zeros in |str| to align with the DER represention for a bit string
+// trailing zeros in |str| to align with the DER representation for a bit string
 // with named bits. It returns one on success and zero on error. |n| is indexed
 // beginning from zero.
 OPENSSL_EXPORT int ASN1_BIT_STRING_set_bit(ASN1_BIT_STRING *str, int n,
@@ -1256,10 +1248,6 @@ OPENSSL_EXPORT ASN1_TIME *d2i_ASN1_TIME(ASN1_TIME **out, const uint8_t **inp,
 // i2d_ASN1_TIME marshals |in| as a DER-encoded X.509 Time (RFC 5280), as
 // described in |i2d_SAMPLE|.
 OPENSSL_EXPORT int i2d_ASN1_TIME(const ASN1_TIME *in, uint8_t **outp);
-
-// ASN1_TIME is an |ASN1_ITEM| whose ASN.1 type is X.509 Time (RFC 5280) and C
-// type is |ASN1_TIME*|.
-DECLARE_ASN1_ITEM(ASN1_TIME)
 
 // ASN1_TIME_diff computes |to| - |from|. On success, it sets |*out_days| to the
 // difference in days, rounded towards zero, sets |*out_seconds| to the
@@ -1790,6 +1778,28 @@ OPENSSL_EXPORT int ASN1_object_size(int constructed, int length, int tag);
 
 // Deprecated functions.
 
+// ASN1_STRING_FLAG_BITS_LEFT does nothing. Historically, when a BIT STRING
+// lacked this flag, it enabled an implicit truncation behavior. This has since
+// been removed.
+//
+// TODO(crbug.com/443769299): Remove this when |ASN1_STRING| is opaque. For now,
+// we continue to set it in various codepaths, in case code is querying |flags|
+// manually, even though it does nothing.
+#define ASN1_STRING_FLAG_BITS_LEFT 0x08
+
+// ASN1_BIT_STRING_num_bytes computes the length of |str| in bytes. If |str|'s
+// bit length is a multiple of 8, it sets |*out| to the byte length and returns
+// one. Otherwise, it returns zero.
+//
+// This function may be used with |ASN1_STRING_get0_data| to interpret |str| as
+// a byte string.
+//
+// This function is no longer necessary. The byte length is always equal to
+// |ASN1_STRING_length| and callers can check for a whole number of bytes by
+// checking if |ASN1_BIT_STRING_unused_bits| is zero.
+OPENSSL_EXPORT int ASN1_BIT_STRING_num_bytes(const ASN1_BIT_STRING *str,
+                                             size_t *out);
+
 // ASN1_STRING_set_default_mask does nothing.
 OPENSSL_EXPORT void ASN1_STRING_set_default_mask(unsigned long mask);
 
@@ -1849,50 +1859,6 @@ OPENSSL_EXPORT void ASN1_STRING_TABLE_cleanup(void);
 #define M_ASN1_VISIBLESTRING_free(a) ASN1_VISIBLESTRING_free(a)
 #define M_ASN1_UTF8STRING_new() ASN1_UTF8STRING_new()
 #define M_ASN1_UTF8STRING_free(a) ASN1_UTF8STRING_free(a)
-
-// B_ASN1_PRINTABLE is a bitmask for an ad-hoc subset of string-like types. Note
-// the presence of |B_ASN1_UNKNOWN| means it includes types which |ASN1_tag2bit|
-// maps to |B_ASN1_UNKNOWN|.
-//
-// Do not use this. Despite the name, it has no connection to PrintableString or
-// printable characters. See https://crbug.com/boringssl/412.
-#define B_ASN1_PRINTABLE                                              \
-  (B_ASN1_NUMERICSTRING | B_ASN1_PRINTABLESTRING | B_ASN1_T61STRING | \
-   B_ASN1_IA5STRING | B_ASN1_BIT_STRING | B_ASN1_UNIVERSALSTRING |    \
-   B_ASN1_BMPSTRING | B_ASN1_UTF8STRING | B_ASN1_SEQUENCE | B_ASN1_UNKNOWN)
-
-// ASN1_PRINTABLE_new returns a newly-allocated |ASN1_STRING| with type -1, or
-// NULL on error. The resulting |ASN1_STRING| is not a valid ASN.1 value until
-// initialized with a value.
-OPENSSL_EXPORT ASN1_STRING *ASN1_PRINTABLE_new(void);
-
-// ASN1_PRINTABLE_free calls |ASN1_STRING_free|.
-OPENSSL_EXPORT void ASN1_PRINTABLE_free(ASN1_STRING *str);
-
-// d2i_ASN1_PRINTABLE parses up to |len| bytes from |*inp| as a DER-encoded
-// CHOICE of an ad-hoc subset of string-like types, as described in
-// |d2i_SAMPLE|.
-//
-// Do not use this. Despite, the name it has no connection to PrintableString or
-// printable characters. See https://crbug.com/boringssl/412.
-//
-// TODO(https://crbug.com/boringssl/354): This function currently also accepts
-// BER, but this will be removed in the future.
-OPENSSL_EXPORT ASN1_STRING *d2i_ASN1_PRINTABLE(ASN1_STRING **out,
-                                               const uint8_t **inp, long len);
-
-// i2d_ASN1_PRINTABLE marshals |in| as DER, as described in |i2d_SAMPLE|.
-//
-// Do not use this. Despite the name, it has no connection to PrintableString or
-// printable characters. See https://crbug.com/boringssl/412.
-OPENSSL_EXPORT int i2d_ASN1_PRINTABLE(const ASN1_STRING *in, uint8_t **outp);
-
-// ASN1_PRINTABLE is an |ASN1_ITEM| whose ASN.1 type is a CHOICE of an ad-hoc
-// subset of string-like types, and whose C type is |ASN1_STRING*|.
-//
-// Do not use this. Despite the name, it has no connection to PrintableString or
-// printable characters. See https://crbug.com/boringssl/412.
-DECLARE_ASN1_ITEM(ASN1_PRINTABLE)
 
 // ASN1_INTEGER_set sets |a| to an INTEGER with value |v|. It returns one on
 // success and zero on error.

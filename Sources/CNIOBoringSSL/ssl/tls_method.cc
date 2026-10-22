@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -189,7 +194,7 @@ BSSL_NAMESPACE_END
 
 using namespace bssl;
 
-const SSL_METHOD *TLS_method(void) {
+const SSL_METHOD *TLS_method() {
   static const SSL_METHOD kMethod = {
       0,
       &kTLSProtocolMethod,
@@ -198,9 +203,9 @@ const SSL_METHOD *TLS_method(void) {
   return &kMethod;
 }
 
-const SSL_METHOD *SSLv23_method(void) { return TLS_method(); }
+const SSL_METHOD *SSLv23_method() { return TLS_method(); }
 
-const SSL_METHOD *TLS_with_buffers_method(void) {
+const SSL_METHOD *TLS_with_buffers_method() {
   static const SSL_METHOD kMethod = {
       0,
       &kTLSProtocolMethod,
@@ -211,7 +216,7 @@ const SSL_METHOD *TLS_with_buffers_method(void) {
 
 // Legacy version-locked methods.
 
-const SSL_METHOD *TLSv1_2_method(void) {
+const SSL_METHOD *TLSv1_2_method() {
   static const SSL_METHOD kMethod = {
       TLS1_2_VERSION,
       &kTLSProtocolMethod,
@@ -220,7 +225,7 @@ const SSL_METHOD *TLSv1_2_method(void) {
   return &kMethod;
 }
 
-const SSL_METHOD *TLSv1_1_method(void) {
+const SSL_METHOD *TLSv1_1_method() {
   static const SSL_METHOD kMethod = {
       TLS1_1_VERSION,
       &kTLSProtocolMethod,
@@ -229,7 +234,7 @@ const SSL_METHOD *TLSv1_1_method(void) {
   return &kMethod;
 }
 
-const SSL_METHOD *TLSv1_method(void) {
+const SSL_METHOD *TLSv1_method() {
   static const SSL_METHOD kMethod = {
       TLS1_VERSION,
       &kTLSProtocolMethod,
@@ -240,22 +245,22 @@ const SSL_METHOD *TLSv1_method(void) {
 
 // Legacy side-specific methods.
 
-const SSL_METHOD *TLSv1_2_server_method(void) { return TLSv1_2_method(); }
+const SSL_METHOD *TLSv1_2_server_method() { return TLSv1_2_method(); }
 
-const SSL_METHOD *TLSv1_1_server_method(void) { return TLSv1_1_method(); }
+const SSL_METHOD *TLSv1_1_server_method() { return TLSv1_1_method(); }
 
-const SSL_METHOD *TLSv1_server_method(void) { return TLSv1_method(); }
+const SSL_METHOD *TLSv1_server_method() { return TLSv1_method(); }
 
-const SSL_METHOD *TLSv1_2_client_method(void) { return TLSv1_2_method(); }
+const SSL_METHOD *TLSv1_2_client_method() { return TLSv1_2_method(); }
 
-const SSL_METHOD *TLSv1_1_client_method(void) { return TLSv1_1_method(); }
+const SSL_METHOD *TLSv1_1_client_method() { return TLSv1_1_method(); }
 
-const SSL_METHOD *TLSv1_client_method(void) { return TLSv1_method(); }
+const SSL_METHOD *TLSv1_client_method() { return TLSv1_method(); }
 
-const SSL_METHOD *SSLv23_server_method(void) { return SSLv23_method(); }
+const SSL_METHOD *SSLv23_server_method() { return SSLv23_method(); }
 
-const SSL_METHOD *SSLv23_client_method(void) { return SSLv23_method(); }
+const SSL_METHOD *SSLv23_client_method() { return SSLv23_method(); }
 
-const SSL_METHOD *TLS_server_method(void) { return TLS_method(); }
+const SSL_METHOD *TLS_server_method() { return TLS_method(); }
 
-const SSL_METHOD *TLS_client_method(void) { return TLS_method(); }
+const SSL_METHOD *TLS_client_method() { return TLS_method(); }

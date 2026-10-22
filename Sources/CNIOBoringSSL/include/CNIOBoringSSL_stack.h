@@ -1,16 +1,21 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_STACK_H
 #define OPENSSL_HEADER_STACK_H
 
-#include "CNIOBoringSSL_base.h"
+#include "CNIOBoringSSL_base.h"   // IWYU pragma: export
 
 #if defined(__cplusplus)
 extern "C" {
@@ -42,6 +47,8 @@ extern "C" {
 // are |type| *. This macro makes the |sk_name_*| functions available.
 //
 // It is not necessary to use |DECLARE_STACK_OF| in files which use this macro.
+//
+// Must be used from the global namespace.
 #define DEFINE_NAMED_STACK_OF(name, type)                    \
   BORINGSSL_DEFINE_STACK_OF_IMPL(name, type *, const type *) \
   BORINGSSL_DEFINE_STACK_TRAITS(name, type, false)
@@ -50,15 +57,31 @@ extern "C" {
 // |type| *. This macro makes the |sk_type_*| functions available.
 //
 // It is not necessary to use |DECLARE_STACK_OF| in files which use this macro.
+//
+// Must be used from the global namespace.
 #define DEFINE_STACK_OF(type) DEFINE_NAMED_STACK_OF(type, type)
 
 // DEFINE_CONST_STACK_OF defines |STACK_OF(type)| to be a stack whose elements
 // are const |type| *. This macro makes the |sk_type_*| functions available.
 //
 // It is not necessary to use |DECLARE_STACK_OF| in files which use this macro.
+//
+// Must be used from the global namespace.
 #define DEFINE_CONST_STACK_OF(type)                                \
   BORINGSSL_DEFINE_STACK_OF_IMPL(type, const type *, const type *) \
   BORINGSSL_DEFINE_STACK_TRAITS(type, const type, true)
+
+// DEFINE_NAMESPACED_STACK_OF is same as |DEFINE_STACK_OF| but to be used for
+// internal stacks from within the bssl namespace.
+//
+// Such stacks then can only be accessed using |STACK_OF| if in the |bssl|
+// namespace or if the |bssl| namespace has been imported with a
+// using-directive.
+#define DEFINE_NAMESPACED_STACK_OF(type)                     \
+  BORINGSSL_DEFINE_STACK_OF_IMPL(type, type *, const type *) \
+  BSSL_NAMESPACE_END                                         \
+  BORINGSSL_DEFINE_STACK_TRAITS(type, type, false)           \
+  BSSL_NAMESPACE_BEGIN
 
 
 // Using stacks.
@@ -177,7 +200,8 @@ STACK_OF(SAMPLE) *sk_SAMPLE_dup(const STACK_OF(SAMPLE) *sk);
 
 // sk_SAMPLE_sort sorts the elements of |sk| into ascending order based on the
 // comparison function. The stack maintains a "sorted" flag and sorting an
-// already sorted stack is a no-op.
+// already sorted stack is a no-op. Sorting preserves the relative order of
+// elements that are equivalent under the comparison function.
 void sk_SAMPLE_sort(STACK_OF(SAMPLE) *sk);
 
 // sk_SAMPLE_is_sorted returns one if |sk| is known to be sorted and zero
@@ -355,9 +379,15 @@ BSSL_NAMESPACE_END
    * positive warning. */                                                      \
   OPENSSL_MSVC_PRAGMA(warning(push))                                           \
   OPENSSL_MSVC_PRAGMA(warning(disable : 4191))                                 \
-  OPENSSL_CLANG_PRAGMA("clang diagnostic push")                                \
-  OPENSSL_CLANG_PRAGMA("clang diagnostic ignored \"-Wunknown-warning-option\"") \
-  OPENSSL_CLANG_PRAGMA("clang diagnostic ignored \"-Wcast-function-type-strict\"") \
+  OPENSSL_GNUC_CLANG_PRAGMA("GCC diagnostic push")                             \
+  OPENSSL_CLANG_PRAGMA(                                                        \
+      "clang diagnostic ignored \"-Wunknown-warning-option\"")                 \
+  OPENSSL_CLANG_PRAGMA(                                                        \
+      "clang diagnostic ignored \"-Wcast-function-type-strict\"")              \
+  /* We also disable -Wcast-qual. As part of this C-based type erasure setup,  \
+   * the wrapper macros need to cast away const in places. In C++, const_cast  \
+   * suppresses the warning, but it seemingly cannot be suppressed in C. */    \
+  OPENSSL_GNUC_CLANG_PRAGMA("GCC diagnostic ignored \"-Wcast-qual\"")          \
                                                                                \
   DECLARE_STACK_OF(name)                                                       \
                                                                                \
@@ -493,7 +523,7 @@ BSSL_NAMESPACE_END
         (OPENSSL_sk_free_func)free_func);                                      \
   }                                                                            \
                                                                                \
-  OPENSSL_CLANG_PRAGMA("clang diagnostic pop")                                 \
+  OPENSSL_GNUC_CLANG_PRAGMA("GCC diagnostic pop")                              \
   OPENSSL_MSVC_PRAGMA(warning(pop))
 
 
@@ -510,6 +540,7 @@ DEFINE_NAMED_STACK_OF(OPENSSL_STRING, char)
 #endif
 
 #if !defined(BORINGSSL_NO_CXX)
+// Work around consumers including our headers under extern "C".
 extern "C++" {
 
 #include <type_traits>
@@ -597,6 +628,20 @@ PushToStack(Stack *sk,
   // OPENSSL_sk_push takes ownership on success.
   elem.release();
   return true;
+}
+
+// Define begin() and end() for stack types so C++ range for loops work.
+// This pair of functions is for DEFINE_NAMESPACED_STACK_OF stacks, unlike
+// the other pair, which is for DEFINE_STACK_OF ones.
+template <typename Stack>
+inline bssl::internal::StackIterator<Stack> begin(const Stack *sk) {
+  return bssl::internal::StackIterator<Stack>(sk, 0);
+}
+
+template <typename Stack>
+inline bssl::internal::StackIterator<Stack> end(const Stack *sk) {
+  return bssl::internal::StackIterator<Stack>(
+      sk, OPENSSL_sk_num(reinterpret_cast<const OPENSSL_STACK *>(sk)));
 }
 
 BSSL_NAMESPACE_END

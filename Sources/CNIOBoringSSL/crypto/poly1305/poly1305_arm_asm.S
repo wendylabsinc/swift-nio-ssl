@@ -1,5 +1,4 @@
 #define BORINGSSL_PREFIX CNIOBoringSSL
-#if defined(__arm__) && defined(__linux__)
 #include <CNIOBoringSSL_asm_base.h>
 
 #if !defined(OPENSSL_NO_ASM) && defined(OPENSSL_ARM) && defined(__ELF__)
@@ -2017,7 +2016,6 @@ add sp,sp,#0
 bx lr
 
 #endif  /* !OPENSSL_NO_ASM && OPENSSL_ARM && __ELF__ */
-#endif  // defined(__arm__) && defined(__linux__)
 #if defined(__linux__) && defined(__ELF__)
 .section .note.GNU-stack,"",%progbits
 #endif

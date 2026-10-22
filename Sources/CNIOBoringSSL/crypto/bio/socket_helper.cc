@@ -1,16 +1,16 @@
-/* Copyright 2014 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #if defined(__linux__)
 #undef _POSIX_C_SOURCE
@@ -30,21 +30,21 @@
 #include <netdb.h>
 #include <unistd.h>
 #else
-OPENSSL_MSVC_PRAGMA(warning(push, 3))
 #include <winsock2.h>
 #include <ws2tcpip.h>
-OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
 
 #include "internal.h"
 #include "../internal.h"
 
 
-int bio_ip_and_port_to_socket_and_addr(int *out_sock,
-                                       struct sockaddr_storage *out_addr,
-                                       socklen_t *out_addr_length,
-                                       const char *hostname,
-                                       const char *port_str) {
+using namespace bssl;
+
+int bssl::bio_ip_and_port_to_socket_and_addr(int *out_sock,
+                                             struct sockaddr_storage *out_addr,
+                                             socklen_t *out_addr_length,
+                                             const char *hostname,
+                                             const char *port_str) {
   struct addrinfo hint, *result, *cur;
   int ret;
 
@@ -90,7 +90,7 @@ out:
   return ret;
 }
 
-int bio_socket_nbio(int sock, int on) {
+int bssl::bio_socket_nbio(int sock, int on) {
 #if defined(OPENSSL_WINDOWS)
   u_long arg = on;
 
@@ -109,9 +109,9 @@ int bio_socket_nbio(int sock, int on) {
 #endif
 }
 
-void bio_clear_socket_error(void) {}
+void bssl::bio_clear_socket_error() {}
 
-int bio_sock_error(int sock) {
+int bssl::bio_sock_error(int sock) {
   int error;
   socklen_t error_size = sizeof(error);
 
@@ -121,7 +121,7 @@ int bio_sock_error(int sock) {
   return error;
 }
 
-int bio_socket_should_retry(int return_value) {
+int bssl::bio_socket_should_retry(int return_value) {
 #if defined(OPENSSL_WINDOWS)
   return return_value == -1 && WSAGetLastError() == WSAEWOULDBLOCK;
 #else

@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -42,14 +47,11 @@ static const uint8_t kMaxWarningAlerts = 4;
 // ssl_needs_record_splitting returns one if |ssl|'s current outgoing cipher
 // state needs record-splitting and zero otherwise.
 bool ssl_needs_record_splitting(const SSL *ssl) {
-#if !defined(BORINGSSL_UNSAFE_FUZZER_MODE)
-  return !ssl->s3->aead_write_ctx->is_null_cipher() &&
+  return !CRYPTO_fuzzer_mode_enabled() &&
+         !ssl->s3->aead_write_ctx->is_null_cipher() &&
          ssl_protocol_version(ssl) < TLS1_1_VERSION &&
          (ssl->mode & SSL_MODE_CBC_RECORD_SPLITTING) != 0 &&
          SSL_CIPHER_is_block_cipher(ssl->s3->aead_write_ctx->cipher());
-#else
-  return false;
-#endif
 }
 
 size_t ssl_record_prefix_len(const SSL *ssl) {
@@ -141,7 +143,7 @@ ssl_open_record_t tls_open_record(SSL *ssl, uint8_t *out_type,
     return ssl_open_record_partial;
   }
 
-  Span<const uint8_t> header = in.subspan(0, SSL3_RT_HEADER_LENGTH);
+  auto header = in.first(SSL3_RT_HEADER_LENGTH);
   ssl_do_msg_callback(ssl, 0 /* read */, SSL3_RT_HEADER, header);
 
   *out_consumed = in.size() - CBS_len(&cbs);
@@ -262,7 +264,7 @@ static bool do_seal_record(SSL *ssl, uint8_t *out_prefix, uint8_t *out,
                            uint8_t *out_suffix, uint8_t type, const uint8_t *in,
                            const size_t in_len) {
   SSLAEADContext *aead = ssl->s3->aead_write_ctx.get();
-  uint8_t *extra_in = NULL;
+  uint8_t *extra_in = nullptr;
   size_t extra_in_len = 0;
   if (!aead->is_null_cipher() && ssl_protocol_version(ssl) >= TLS1_3_VERSION) {
     // TLS 1.3 hides the actual record type inside the encrypted data.

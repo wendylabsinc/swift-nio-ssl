@@ -5,8 +5,6 @@
 #include <CNIOBoringSSL_asm_base.h>
 
 #if !defined(OPENSSL_NO_ASM) && defined(OPENSSL_AARCH64) && defined(__APPLE__)
-#include <CNIOBoringSSL_arm_arch.h>
-
 .text
 
 .globl	_gcm_init_neon

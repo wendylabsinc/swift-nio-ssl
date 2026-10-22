@@ -1,12 +1,17 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright 2005 Nokia. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -23,8 +28,9 @@
 #include <CNIOBoringSSL_mem.h>
 #include <CNIOBoringSSL_nid.h>
 #include <CNIOBoringSSL_rand.h>
+#include <CNIOBoringSSL_span.h>
+#include <CNIOBoringSSL_tls_prf.h>
 
-#include "../crypto/fipsmodule/tls/internal.h"
 #include "../crypto/internal.h"
 #include "internal.h"
 
@@ -34,16 +40,17 @@ BSSL_NAMESPACE_BEGIN
 bool tls1_prf(const EVP_MD *digest, Span<uint8_t> out,
               Span<const uint8_t> secret, std::string_view label,
               Span<const uint8_t> seed1, Span<const uint8_t> seed2) {
+  auto label_bytes = StringAsBytes(label);
   return 1 == CRYPTO_tls1_prf(digest, out.data(), out.size(), secret.data(),
-                              secret.size(), label.data(), label.size(),
-                              seed1.data(), seed1.size(), seed2.data(),
-                              seed2.size());
+                              secret.size(), label_bytes.data(),
+                              label_bytes.size(), seed1.data(), seed1.size(),
+                              seed2.data(), seed2.size());
 }
 
 static bool get_key_block_lengths(const SSL *ssl, size_t *out_mac_secret_len,
                                   size_t *out_key_len, size_t *out_iv_len,
                                   const SSL_CIPHER *cipher) {
-  const EVP_AEAD *aead = NULL;
+  const EVP_AEAD *aead = nullptr;
   if (!ssl_cipher_get_evp_aead(&aead, out_mac_secret_len, out_iv_len, cipher,
                                ssl_protocol_version(ssl))) {
     OPENSSL_PUT_ERROR(SSL, SSL_R_CIPHER_OR_HASH_UNAVAILABLE);
@@ -194,7 +201,7 @@ int SSL_generate_key_block(const SSL *ssl, uint8_t *out, size_t out_len) {
   return generate_key_block(ssl, Span(out, out_len), SSL_get_session(ssl));
 }
 
-int SSL_export_keying_material(SSL *ssl, uint8_t *out, size_t out_len,
+int SSL_export_keying_material(const SSL *ssl, uint8_t *out, size_t out_len,
                                const char *label, size_t label_len,
                                const uint8_t *context, size_t context_len,
                                int use_context) {

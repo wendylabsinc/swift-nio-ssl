@@ -1,13 +1,18 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2005 Nokia. All rights reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+// Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved.
+// Copyright 2005 Nokia. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
@@ -21,6 +26,7 @@
 #include <CNIOBoringSSL_x509.h>
 
 #include "../crypto/internal.h"
+#include "../crypto/bytestring/internal.h"
 #include "internal.h"
 
 
@@ -30,25 +36,25 @@ BSSL_NAMESPACE_BEGIN
 // installed. Calling an X509-based method on an |ssl| with a different method
 // will likely misbehave and possibly crash or leak memory.
 static void check_ssl_x509_method(const SSL *ssl) {
-  assert(ssl == NULL || ssl->ctx->x509_method == &ssl_crypto_x509_method);
+  assert(ssl == nullptr || ssl->ctx->x509_method == &ssl_crypto_x509_method);
 }
 
 // check_ssl_ctx_x509_method acts like |check_ssl_x509_method|, but for an
 // |SSL_CTX|.
 static void check_ssl_ctx_x509_method(const SSL_CTX *ctx) {
-  assert(ctx == NULL || ctx->x509_method == &ssl_crypto_x509_method);
+  assert(ctx == nullptr || ctx->x509_method == &ssl_crypto_x509_method);
 }
 
 // x509_to_buffer returns a |CRYPTO_BUFFER| that contains the serialised
 // contents of |x509|.
 static UniquePtr<CRYPTO_BUFFER> x509_to_buffer(X509 *x509) {
-  uint8_t *buf = NULL;
+  uint8_t *buf = nullptr;
   int cert_len = i2d_X509(x509, &buf);
   if (cert_len <= 0) {
-    return 0;
+    return nullptr;
   }
 
-  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(buf, cert_len, NULL));
+  UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_new(buf, cert_len, nullptr));
   OPENSSL_free(buf);
 
   return buffer;
@@ -66,7 +72,7 @@ static void ssl_crypto_x509_cert_flush_cached_chain(CERT *cert) {
 
 // ssl_cert_set1_chain sets elements 1.. of |cert->chain| to the serialised
 // forms of elements of |chain|. It returns one on success or zero on error, in
-// which case no change to |cert->chain| is made. It preverses the existing
+// which case no change to |cert->chain| is made. It preserves the existing
 // leaf from |cert->chain|, if any.
 static bool ssl_cert_set1_chain(CERT *cert, STACK_OF(X509) *chain) {
   cert->legacy_credential->ClearIntermediateCerts();
@@ -195,6 +201,9 @@ static void ssl_crypto_x509_session_clear(SSL_SESSION *session) {
 static bool ssl_crypto_x509_session_verify_cert_chain(SSL_SESSION *session,
                                                       SSL_HANDSHAKE *hs,
                                                       uint8_t *out_alert) {
+  if (session->peer_cert_type != TLSEXT_cert_type_x509) {
+    return false;
+  }
   *out_alert = SSL_AD_INTERNAL_ERROR;
   STACK_OF(X509) *const cert_chain = session->x509_chain;
   if (cert_chain == nullptr || sk_X509_num(cert_chain) == 0) {
@@ -287,7 +296,7 @@ static bool ssl_crypto_x509_ssl_auto_chain_if_needed(SSL_HANDSHAKE *hs) {
   // Only build a chain if the feature isn't disabled, the legacy credential
   // exists but has no intermediates configured.
   SSL *ssl = hs->ssl;
-  SSL_CREDENTIAL *cred = hs->config->cert->legacy_credential.get();
+  SSLCredential *cred = hs->config->cert->legacy_credential.get();
   if ((ssl->mode & SSL_MODE_NO_AUTO_CHAIN) || !cred->IsComplete() ||
       sk_CRYPTO_BUFFER_num(cred->chain.get()) != 1) {
     return true;
@@ -365,12 +374,12 @@ using namespace bssl;
 
 X509 *SSL_get_peer_certificate(const SSL *ssl) {
   check_ssl_x509_method(ssl);
-  if (ssl == NULL) {
-    return NULL;
+  if (ssl == nullptr) {
+    return nullptr;
   }
   SSL_SESSION *session = SSL_get_session(ssl);
-  if (session == NULL || session->x509_peer == NULL) {
-    return NULL;
+  if (session == nullptr || session->x509_peer == nullptr) {
+    return nullptr;
   }
   X509_up_ref(session->x509_peer);
   return session->x509_peer;
@@ -394,8 +403,8 @@ STACK_OF(X509) *SSL_get_peer_cert_chain(const SSL *ssl) {
 STACK_OF(X509) *SSL_get_peer_full_cert_chain(const SSL *ssl) {
   check_ssl_x509_method(ssl);
   SSL_SESSION *session = SSL_get_session(ssl);
-  if (session == NULL) {
-    return NULL;
+  if (session == nullptr) {
+    return nullptr;
   }
 
   return session->x509_chain;
@@ -449,7 +458,7 @@ X509_VERIFY_PARAM *SSL_get0_param(SSL *ssl) {
   check_ssl_x509_method(ssl);
   if (!ssl->config) {
     assert(ssl->config);
-    return 0;
+    return nullptr;
   }
   return ssl->config->param;
 }
@@ -467,7 +476,7 @@ int (*SSL_get_verify_callback(const SSL *ssl))(int, X509_STORE_CTX *) {
   check_ssl_x509_method(ssl);
   if (!ssl->config) {
     assert(ssl->config);
-    return 0;
+    return nullptr;
   }
   return ssl->config->verify_callback;
 }
@@ -495,7 +504,7 @@ void SSL_set_verify(SSL *ssl, int mode,
     return;
   }
   ssl->config->verify_mode = mode;
-  if (callback != NULL) {
+  if (callback != nullptr) {
     ssl->config->verify_callback = callback;
   }
 }
@@ -541,7 +550,7 @@ int SSL_CTX_load_verify_locations(SSL_CTX *ctx, const char *ca_file,
 long SSL_get_verify_result(const SSL *ssl) {
   check_ssl_x509_method(ssl);
   SSL_SESSION *session = SSL_get_session(ssl);
-  if (session == NULL) {
+  if (session == nullptr) {
     return X509_V_ERR_INVALID_CALL;
   }
   return session->verify_result;
@@ -559,7 +568,7 @@ void SSL_CTX_set_cert_store(SSL_CTX *ctx, X509_STORE *store) {
 }
 
 static int ssl_use_certificate(CERT *cert, X509 *x) {
-  if (x == NULL) {
+  if (x == nullptr) {
     OPENSSL_PUT_ERROR(SSL, ERR_R_PASSED_NULL_PARAMETER);
     return 0;
   }
@@ -590,8 +599,8 @@ int SSL_CTX_use_certificate(SSL_CTX *ctx, X509 *x) {
 static int ssl_cert_cache_leaf_cert(CERT *cert) {
   assert(cert->x509_method);
 
-  const SSL_CREDENTIAL *cred = cert->legacy_credential.get();
-  if (cert->x509_leaf != NULL || cred->chain == NULL) {
+  const SSLCredential *cred = cert->legacy_credential.get();
+  if (cert->x509_leaf != nullptr || cred->chain == nullptr) {
     return 1;
   }
 
@@ -601,13 +610,13 @@ static int ssl_cert_cache_leaf_cert(CERT *cert) {
   }
 
   cert->x509_leaf = X509_parse_from_buffer(leaf);
-  return cert->x509_leaf != NULL;
+  return cert->x509_leaf != nullptr;
 }
 
 static X509 *ssl_cert_get0_leaf(CERT *cert) {
-  if (cert->x509_leaf == NULL &&  //
+  if (cert->x509_leaf == nullptr &&  //
       !ssl_cert_cache_leaf_cert(cert)) {
-    return NULL;
+    return nullptr;
   }
 
   return cert->x509_leaf;
@@ -617,14 +626,14 @@ X509 *SSL_get_certificate(const SSL *ssl) {
   check_ssl_x509_method(ssl);
   if (!ssl->config) {
     assert(ssl->config);
-    return 0;
+    return nullptr;
   }
   return ssl_cert_get0_leaf(ssl->config->cert.get());
 }
 
 X509 *SSL_CTX_get0_certificate(const SSL_CTX *ctx) {
   check_ssl_ctx_x509_method(ctx);
-  MutexWriteLock lock(const_cast<CRYPTO_MUTEX *>(&ctx->lock));
+  MutexWriteLock lock(&ctx->lock);
   return ssl_cert_get0_leaf(ctx->cert.get());
 }
 
@@ -718,7 +727,7 @@ int SSL_add1_chain_cert(SSL *ssl, X509 *x509) {
 
 int SSL_CTX_clear_chain_certs(SSL_CTX *ctx) {
   check_ssl_ctx_x509_method(ctx);
-  return SSL_CTX_set0_chain(ctx, NULL);
+  return SSL_CTX_set0_chain(ctx, nullptr);
 }
 
 int SSL_CTX_clear_extra_chain_certs(SSL_CTX *ctx) {
@@ -728,7 +737,7 @@ int SSL_CTX_clear_extra_chain_certs(SSL_CTX *ctx) {
 
 int SSL_clear_chain_certs(SSL *ssl) {
   check_ssl_x509_method(ssl);
-  return SSL_set0_chain(ssl, NULL);
+  return SSL_set0_chain(ssl, nullptr);
 }
 
 // ssl_cert_cache_chain_certs fills in |cert->x509_chain| from elements 1.. of
@@ -736,7 +745,7 @@ int SSL_clear_chain_certs(SSL *ssl) {
 static int ssl_cert_cache_chain_certs(CERT *cert) {
   assert(cert->x509_method);
 
-  const SSL_CREDENTIAL *cred = cert->legacy_credential.get();
+  const SSLCredential *cred = cert->legacy_credential.get();
   if (cert->x509_chain != nullptr || cred->chain == nullptr ||
       sk_CRYPTO_BUFFER_num(cred->chain.get()) < 2) {
     return 1;
@@ -762,9 +771,9 @@ static int ssl_cert_cache_chain_certs(CERT *cert) {
 
 int SSL_CTX_get0_chain_certs(const SSL_CTX *ctx, STACK_OF(X509) **out_chain) {
   check_ssl_ctx_x509_method(ctx);
-  MutexWriteLock lock(const_cast<CRYPTO_MUTEX *>(&ctx->lock));
+  MutexWriteLock lock(&ctx->lock);
   if (!ssl_cert_cache_chain_certs(ctx->cert.get())) {
-    *out_chain = NULL;
+    *out_chain = nullptr;
     return 0;
   }
 
@@ -784,7 +793,7 @@ int SSL_get0_chain_certs(const SSL *ssl, STACK_OF(X509) **out_chain) {
     return 0;
   }
   if (!ssl_cert_cache_chain_certs(ssl->config->cert.get())) {
-    *out_chain = NULL;
+    *out_chain = nullptr;
     return 0;
   }
 
@@ -796,7 +805,7 @@ SSL_SESSION *d2i_SSL_SESSION_bio(BIO *bio, SSL_SESSION **out) {
   uint8_t *data;
   size_t len;
   if (!BIO_read_asn1(bio, &data, &len, 1024 * 1024)) {
-    return 0;
+    return nullptr;
   }
   bssl::UniquePtr<uint8_t> free_data(data);
   const uint8_t *ptr = data;
@@ -815,35 +824,15 @@ int i2d_SSL_SESSION_bio(BIO *bio, const SSL_SESSION *session) {
 
 IMPLEMENT_PEM_rw(SSL_SESSION, SSL_SESSION, PEM_STRING_SSL_SESSION, SSL_SESSION)
 
-SSL_SESSION *d2i_SSL_SESSION(SSL_SESSION **a, const uint8_t **pp, long length) {
-  if (length < 0) {
-    OPENSSL_PUT_ERROR(SSL, ERR_R_INTERNAL_ERROR);
-    return NULL;
-  }
-
-  CBS cbs;
-  CBS_init(&cbs, *pp, length);
-
-  UniquePtr<SSL_SESSION> ret = SSL_SESSION_parse(&cbs, &ssl_crypto_x509_method,
-                                                 NULL /* no buffer pool */);
-  if (!ret) {
-    return NULL;
-  }
-
-  if (a) {
-    SSL_SESSION_free(*a);
-    *a = ret.get();
-  }
-  *pp = CBS_data(&cbs);
-  return ret.release();
+SSL_SESSION *d2i_SSL_SESSION(SSL_SESSION **out, const uint8_t **inp, long len) {
+  return bssl::D2IFromCBS(out, inp, len, [](CBS *cbs) {
+    return SSL_SESSION_parse(cbs, &ssl_crypto_x509_method,
+                             nullptr /* no buffer pool */);
+  });
 }
 
 STACK_OF(X509_NAME) *SSL_dup_CA_list(STACK_OF(X509_NAME) *list) {
-  // TODO(https://crbug.com/boringssl/407): |X509_NAME_dup| should be const.
-  auto name_dup = [](const X509_NAME *name) {
-    return X509_NAME_dup(const_cast<X509_NAME *>(name));
-  };
-  return sk_X509_NAME_deep_copy(list, name_dup, X509_NAME_free);
+  return sk_X509_NAME_deep_copy(list, X509_NAME_dup, X509_NAME_free);
 }
 
 static void set_client_CA_list(UniquePtr<STACK_OF(CRYPTO_BUFFER)> *ca_list,
@@ -855,7 +844,7 @@ static void set_client_CA_list(UniquePtr<STACK_OF(CRYPTO_BUFFER)> *ca_list,
   }
 
   for (X509_NAME *name : name_list) {
-    uint8_t *outp = NULL;
+    uint8_t *outp = nullptr;
     int len = i2d_X509_NAME(name, &outp);
     if (len < 0) {
       return;
@@ -890,17 +879,17 @@ void SSL_CTX_set_client_CA_list(SSL_CTX *ctx, STACK_OF(X509_NAME) *name_list) {
 
 static STACK_OF(X509_NAME) *buffer_names_to_x509(
     const STACK_OF(CRYPTO_BUFFER) *names, STACK_OF(X509_NAME) **cached) {
-  if (names == NULL) {
-    return NULL;
+  if (names == nullptr) {
+    return nullptr;
   }
 
-  if (*cached != NULL) {
+  if (*cached != nullptr) {
     return *cached;
   }
 
   UniquePtr<STACK_OF(X509_NAME)> new_cache(sk_X509_NAME_new_null());
   if (!new_cache) {
-    return NULL;
+    return nullptr;
   }
 
   for (const CRYPTO_BUFFER *buffer : names) {
@@ -910,7 +899,7 @@ static STACK_OF(X509_NAME) *buffer_names_to_x509(
     if (!name ||
         inp != CRYPTO_BUFFER_data(buffer) + CRYPTO_BUFFER_len(buffer) ||
         !PushToStack(new_cache.get(), std::move(name))) {
-      return NULL;
+      return nullptr;
     }
   }
 
@@ -922,23 +911,23 @@ STACK_OF(X509_NAME) *SSL_get_client_CA_list(const SSL *ssl) {
   check_ssl_x509_method(ssl);
   if (!ssl->config) {
     assert(ssl->config);
-    return NULL;
+    return nullptr;
   }
   // For historical reasons, this function is used both to query configuration
   // state on a server as well as handshake state on a client. However, whether
   // |ssl| is a client or server is not known until explicitly configured with
   // |SSL_set_connect_state|. If |do_handshake| is NULL, |ssl| is in an
   // indeterminate mode and |ssl->server| is unset.
-  if (ssl->do_handshake != NULL && !ssl->server) {
-    if (ssl->s3->hs != NULL) {
+  if (ssl->do_handshake != nullptr && !ssl->server) {
+    if (ssl->s3->hs != nullptr) {
       return buffer_names_to_x509(ssl->s3->hs->ca_names.get(),
                                   &ssl->s3->hs->cached_x509_ca_names);
     }
 
-    return NULL;
+    return nullptr;
   }
 
-  if (ssl->config->client_CA != NULL) {
+  if (ssl->config->client_CA != nullptr) {
     return buffer_names_to_x509(
         ssl->config->client_CA.get(),
         (STACK_OF(X509_NAME) **)&ssl->config->cached_x509_client_CA);
@@ -950,7 +939,7 @@ STACK_OF(X509_NAME) *SSL_CTX_get_client_CA_list(const SSL_CTX *ctx) {
   check_ssl_ctx_x509_method(ctx);
   // This is a logically const operation that may be called on multiple threads,
   // so it needs to lock around updating |cached_x509_client_CA|.
-  MutexWriteLock lock(const_cast<CRYPTO_MUTEX *>(&ctx->lock));
+  MutexWriteLock lock(&ctx->lock);
   return buffer_names_to_x509(
       ctx->client_CA.get(),
       const_cast<STACK_OF(X509_NAME) **>(&ctx->cached_x509_client_CA));
@@ -958,11 +947,11 @@ STACK_OF(X509_NAME) *SSL_CTX_get_client_CA_list(const SSL_CTX *ctx) {
 
 static int add_client_CA(UniquePtr<STACK_OF(CRYPTO_BUFFER)> *names, X509 *x509,
                          CRYPTO_BUFFER_POOL *pool) {
-  if (x509 == NULL) {
+  if (x509 == nullptr) {
     return 0;
   }
 
-  uint8_t *outp = NULL;
+  uint8_t *outp = nullptr;
   int len = i2d_X509_NAME(X509_get_subject_name(x509), &outp);
   if (len < 0) {
     return 0;
@@ -979,7 +968,7 @@ static int add_client_CA(UniquePtr<STACK_OF(CRYPTO_BUFFER)> *names, X509 *x509,
     names->reset(sk_CRYPTO_BUFFER_new_null());
     alloced = 1;
 
-    if (*names == NULL) {
+    if (*names == nullptr) {
       return 0;
     }
   }
@@ -1026,8 +1015,8 @@ static int do_client_cert_cb(SSL *ssl, void *arg) {
     return 1;
   }
 
-  X509 *x509 = NULL;
-  EVP_PKEY *pkey = NULL;
+  X509 *x509 = nullptr;
+  EVP_PKEY *pkey = nullptr;
   int ret = ssl->ctx->client_cert_cb(ssl, &x509, &pkey);
   if (ret < 0) {
     return -1;
@@ -1050,7 +1039,7 @@ void SSL_CTX_set_client_cert_cb(SSL_CTX *ctx,
                                           EVP_PKEY **out_pkey)) {
   check_ssl_ctx_x509_method(ctx);
   // Emulate the old client certificate callback with the new one.
-  SSL_CTX_set_cert_cb(ctx, do_client_cert_cb, NULL);
+  SSL_CTX_set_cert_cb(ctx, do_client_cert_cb, nullptr);
   ctx->client_cert_cb = cb;
 }
 
@@ -1059,14 +1048,14 @@ static int set_cert_store(X509_STORE **store_ptr, X509_STORE *new_store,
   X509_STORE_free(*store_ptr);
   *store_ptr = new_store;
 
-  if (new_store != NULL && take_ref) {
+  if (new_store != nullptr && take_ref) {
     X509_STORE_up_ref(new_store);
   }
 
   return 1;
 }
 
-int SSL_get_ex_data_X509_STORE_CTX_idx(void) {
+int SSL_get_ex_data_X509_STORE_CTX_idx() {
   // The ex_data index to go from |X509_STORE_CTX| to |SSL| always uses the
   // reserved app_data slot. Before ex_data was introduced, app_data was used.
   // Avoid breaking any software which assumes |X509_STORE_CTX_get_app_data|

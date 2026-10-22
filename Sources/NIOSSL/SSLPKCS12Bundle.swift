@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 @_implementationOnly import CNIOBoringSSL
+@_implementationOnly import CNIOBoringSSLShims
 
 /// A container for a single PKCS#12 bundle.
 ///
@@ -62,13 +63,13 @@ public struct NIOSSLPKCS12Bundle: Hashable {
             fatalError("Failed to obtain cert and pkey from a PKC12 file")
         }
 
-        let certStackSize = caCerts.map { CNIOBoringSSL_sk_X509_num($0) } ?? 0
+        let certStackSize = caCerts.map { CNIOBoringSSLShims_sk_X509_num($0) } ?? 0
         var certs = [NIOSSLCertificate]()
         certs.reserveCapacity(Int(certStackSize) + 1)
         certs.append(NIOSSLCertificate.fromUnsafePointer(takingOwnership: actualCert))
 
         for idx in 0..<certStackSize {
-            guard let stackCertPtr = CNIOBoringSSL_sk_X509_value(caCerts, idx) else {
+            guard let stackCertPtr = CNIOBoringSSLShims_sk_X509_value(caCerts, idx) else {
                 preconditionFailure("Unable to get cert \(idx) from stack")
             }
             certs.append(NIOSSLCertificate.fromUnsafePointer(takingOwnership: stackCertPtr))
@@ -190,16 +191,16 @@ extension NIOSSLPKCS12Bundle {
             preconditionFailure("At least one certificate must be provided")
         }
 
-        let certificateChainStack = CNIOBoringSSL_sk_X509_new(nil)
+        let certificateChainStack = CNIOBoringSSLShims_sk_X509_new_null()
 
         defer {
-            CNIOBoringSSL_sk_X509_pop_free(certificateChainStack, CNIOBoringSSL_X509_free)
+            CNIOBoringSSLShims_sk_X509_pop_free(certificateChainStack, CNIOBoringSSL_X509_free)
         }
 
         for additionalCertificate in self.certificateChain.dropFirst() {
             let result = additionalCertificate.withUnsafeMutableX509Pointer { certificate in
                 CNIOBoringSSL_X509_up_ref(certificate)
-                return CNIOBoringSSL_sk_X509_push(certificateChainStack, certificate)
+                return CNIOBoringSSLShims_sk_X509_push(certificateChainStack, certificate)
             }
             if result == 0 {
                 fatalError("Failed to add certificate to chain")

@@ -65,14 +65,10 @@ _CET_ENDBR
 
 
 	vpclmulqdq	$0x00,%xmm3,%xmm3,%xmm0
-	vpclmulqdq	$0x01,%xmm3,%xmm3,%xmm1
-	vpclmulqdq	$0x10,%xmm3,%xmm3,%xmm2
-	vpxor	%xmm2,%xmm1,%xmm1
-	vpclmulqdq	$0x01,%xmm0,%xmm6,%xmm2
+	vpclmulqdq	$0x11,%xmm3,%xmm3,%xmm5
+	vpclmulqdq	$0x01,%xmm0,%xmm6,%xmm1
 	vpshufd	$0x4e,%xmm0,%xmm0
 	vpxor	%xmm0,%xmm1,%xmm1
-	vpxor	%xmm2,%xmm1,%xmm1
-	vpclmulqdq	$0x11,%xmm3,%xmm3,%xmm5
 	vpclmulqdq	$0x01,%xmm1,%xmm6,%xmm0
 	vpshufd	$0x4e,%xmm1,%xmm1
 	vpxor	%xmm1,%xmm5,%xmm5
@@ -188,6 +184,8 @@ _CET_ENDBR
 
 	vpshufb	%xmm1,%xmm0,%xmm0
 	vmovdqu	%xmm0,(%rdi)
+
+
 	ret
 
 .cfi_endproc	
@@ -203,14 +201,24 @@ _CET_ENDBR
 
 
 
-	vbroadcasti128	.Lbswap_mask(%rip),%ymm6
+
+
+
+	vmovdqu	.Lbswap_mask(%rip),%xmm6
+	vmovdqu	.Lgfpoly(%rip),%xmm7
+
+
 	vmovdqu	(%rdi),%xmm5
 	vpshufb	%xmm6,%xmm5,%xmm5
-	vbroadcasti128	.Lgfpoly(%rip),%ymm7
 
 
 	cmpq	$32,%rcx
 	jb	.Lghash_lastblock
+
+
+
+	vinserti128	$1,%xmm6,%ymm6,%ymm6
+	vinserti128	$1,%xmm7,%ymm7,%ymm7
 
 	cmpq	$127,%rcx
 	jbe	.Lghash_loop_1x
@@ -320,9 +328,6 @@ _CET_ENDBR
 .Lghash_loop_1x_done:
 
 
-	vzeroupper
-
-
 .Lghash_lastblock:
 	testq	%rcx,%rcx
 	jz	.Lghash_done
@@ -349,6 +354,8 @@ _CET_ENDBR
 
 	vpshufb	%xmm6,%xmm5,%xmm5
 	vmovdqu	%xmm5,(%rdi)
+
+	vzeroupper
 	ret
 
 .cfi_endproc	
@@ -369,7 +376,7 @@ _CET_ENDBR
 #ifdef BORINGSSL_DISPATCH_TEST
 .extern	BORINGSSL_function_hit
 .hidden BORINGSSL_function_hit
-	movb	$1,BORINGSSL_function_hit+8(%rip)
+	movb	$1,BORINGSSL_function_hit+6(%rip)
 #endif
 	vbroadcasti128	.Lbswap_mask(%rip),%ymm0
 

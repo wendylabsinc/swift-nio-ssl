@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef OPENSSL_HEADER_PEM_H
 #define OPENSSL_HEADER_PEM_H
@@ -23,9 +28,17 @@
 // |OPENSSL_malloc| from pem.h or err.h
 #include "CNIOBoringSSL_crypto.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 extern "C" {
 #endif
+
+
+// PEM.
+//
+// This library contains functions for reading and writing data encoded in PEM
+// format. This format originated in Privacy-Enhanced Mail (RFC 1421).
+//
+// TODO(crbug.com/42290574): Finish documenting this header.
 
 
 #define PEM_BUFSIZE 1024
@@ -55,7 +68,6 @@ extern "C" {
 #define PEM_STRING_ECPRIVATEKEY "EC PRIVATE KEY"
 #define PEM_STRING_CMS "CMS"
 
-// enc_type is one off
 #define PEM_TYPE_ENCRYPTED 10
 #define PEM_TYPE_MIC_ONLY 20
 #define PEM_TYPE_MIC_CLEAR 30
@@ -352,6 +364,7 @@ DECLARE_PEM_rw(X509, X509)
 
 // TODO(crbug.com/boringssl/426): When documenting these, copy the warning
 // about auxiliary properties from |PEM_X509_INFO_read_bio|.
+
 DECLARE_PEM_rw(X509_AUX, X509)
 
 DECLARE_PEM_rw(X509_REQ, X509_REQ)
@@ -432,8 +445,8 @@ OPENSSL_EXPORT int PEM_write_PKCS8PrivateKey(FILE *fp, const EVP_PKEY *x,
                                              pem_password_cb *cd, void *u);
 
 
-#ifdef __cplusplus
-}  // extern "C"
+#if defined(__cplusplus)
+}  // extern C
 #endif
 
 #define PEM_R_BAD_BASE64_DECODE 100

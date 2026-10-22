@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_cipher.h>
 #include <CNIOBoringSSL_nid.h>
@@ -346,19 +351,19 @@ static int rc2_init_key(EVP_CIPHER_CTX *ctx, const uint8_t *key,
   return 1;
 }
 
-static int rc2_cbc_cipher(EVP_CIPHER_CTX *ctx, uint8_t *out, const uint8_t *in,
-                          size_t inl) {
+static int rc2_cbc_cipher_update(EVP_CIPHER_CTX *ctx, uint8_t *out,
+                                 const uint8_t *in, size_t len) {
   EVP_RC2_KEY *key = (EVP_RC2_KEY *)ctx->cipher_data;
   static const size_t kChunkSize = 0x10000;
 
-  while (inl >= kChunkSize) {
+  while (len >= kChunkSize) {
     RC2_cbc_encrypt(in, out, kChunkSize, &key->ks, ctx->iv, ctx->encrypt);
-    inl -= kChunkSize;
+    len -= kChunkSize;
     in += kChunkSize;
     out += kChunkSize;
   }
-  if (inl) {
-    RC2_cbc_encrypt(in, out, inl, &key->ks, ctx->iv, ctx->encrypt);
+  if (len) {
+    RC2_cbc_encrypt(in, out, len, &key->ks, ctx->iv, ctx->encrypt);
   }
   return 1;
 }
@@ -389,12 +394,14 @@ static const EVP_CIPHER rc2_40_cbc = {
     /*ctx_size=*/sizeof(EVP_RC2_KEY),
     /*flags=*/EVP_CIPH_CBC_MODE | EVP_CIPH_VARIABLE_LENGTH | EVP_CIPH_CTRL_INIT,
     /*init=*/rc2_init_key,
-    /*cipher=*/rc2_cbc_cipher,
+    /*cipher_update=*/rc2_cbc_cipher_update,
+    /*cipher_final=*/nullptr,
+    /*update_aad=*/nullptr,
     /*cleanup=*/nullptr,
     /*ctrl=*/rc2_ctrl,
 };
 
-const EVP_CIPHER *EVP_rc2_40_cbc(void) { return &rc2_40_cbc; }
+const EVP_CIPHER *EVP_rc2_40_cbc() { return &rc2_40_cbc; }
 
 static const EVP_CIPHER rc2_cbc = {
     /*nid=*/NID_rc2_cbc,
@@ -404,9 +411,11 @@ static const EVP_CIPHER rc2_cbc = {
     /*ctx_size=*/sizeof(EVP_RC2_KEY),
     /*flags=*/EVP_CIPH_CBC_MODE | EVP_CIPH_VARIABLE_LENGTH | EVP_CIPH_CTRL_INIT,
     /*init=*/rc2_init_key,
-    /*cipher=*/rc2_cbc_cipher,
+    /*cipher_update=*/rc2_cbc_cipher_update,
+    /*cipher_final=*/nullptr,
+    /*update_aad=*/nullptr,
     /*cleanup=*/nullptr,
     /*ctrl=*/rc2_ctrl,
 };
 
-const EVP_CIPHER *EVP_rc2_cbc(void) { return &rc2_cbc; }
+const EVP_CIPHER *EVP_rc2_cbc() { return &rc2_cbc; }

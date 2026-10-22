@@ -1,11 +1,16 @@
-/*
- * Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <assert.h>
 #include <string.h>
@@ -14,16 +19,18 @@
 #include "../../internal.h"
 
 
-void CRYPTO_cbc128_encrypt(const uint8_t *in, uint8_t *out, size_t len,
-                           const AES_KEY *key, uint8_t ivec[16],
-                           block128_f block) {
-  assert(key != NULL && ivec != NULL);
+using namespace bssl;
+
+void bssl::CRYPTO_cbc128_encrypt(const uint8_t *in, uint8_t *out, size_t len,
+                                 const AES_KEY *key, uint8_t ivec[16],
+                                 block128_f block) {
+  assert(key != nullptr && ivec != nullptr);
   if (len == 0) {
     // Avoid |ivec| == |iv| in the |memcpy| below, which is not legal in C.
     return;
   }
 
-  assert(in != NULL && out != NULL);
+  assert(in != nullptr && out != nullptr);
   size_t n;
   const uint8_t *iv = ivec;
   while (len >= 16) {
@@ -55,16 +62,16 @@ void CRYPTO_cbc128_encrypt(const uint8_t *in, uint8_t *out, size_t len,
   OPENSSL_memcpy(ivec, iv, 16);
 }
 
-void CRYPTO_cbc128_decrypt(const uint8_t *in, uint8_t *out, size_t len,
-                           const AES_KEY *key, uint8_t ivec[16],
-                           block128_f block) {
-  assert(key != NULL && ivec != NULL);
+void bssl::CRYPTO_cbc128_decrypt(const uint8_t *in, uint8_t *out, size_t len,
+                                 const AES_KEY *key, uint8_t ivec[16],
+                                 block128_f block) {
+  assert(key != nullptr && ivec != nullptr);
   if (len == 0) {
     // Avoid |ivec| == |iv| in the |memcpy| below, which is not legal in C.
     return;
   }
 
-  assert(in != NULL && out != NULL);
+  assert(in != nullptr && out != nullptr);
 
   const uintptr_t inptr = (uintptr_t) in;
   const uintptr_t outptr = (uintptr_t) out;

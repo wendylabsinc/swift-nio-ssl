@@ -1,31 +1,36 @@
-/* Copyright 2016 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2016 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_curve25519.h>
 
 #include <assert.h>
 #include <string.h>
 
+#include <iterator>
+
 #include <CNIOBoringSSL_bytestring.h>
 #include <CNIOBoringSSL_mem.h>
 #include <CNIOBoringSSL_rand.h>
-#include <CNIOBoringSSL_sha.h>
+#include <CNIOBoringSSL_sha2.h>
 
 #include "../fipsmodule/bn/internal.h"
 #include "../internal.h"
+#include "../mem_internal.h"
 #include "./internal.h"
 
+
+using namespace bssl;
 
 // The following precomputation tables are for the following
 // points used in the SPAKE2 protocol.
@@ -276,10 +281,9 @@ static const uint8_t kSpakeMSmallPrecomp[15 * 2 * 32] = {
 SPAKE2_CTX *SPAKE2_CTX_new(enum spake2_role_t my_role, const uint8_t *my_name,
                            size_t my_name_len, const uint8_t *their_name,
                            size_t their_name_len) {
-  SPAKE2_CTX *ctx =
-      reinterpret_cast<SPAKE2_CTX *>(OPENSSL_zalloc(sizeof(SPAKE2_CTX)));
-  if (ctx == NULL) {
-    return NULL;
+  SPAKE2_CTX *ctx = New<SPAKE2_CTX>();
+  if (ctx == nullptr) {
+    return nullptr;
   }
 
   ctx->my_role = my_role;
@@ -290,20 +294,20 @@ SPAKE2_CTX *SPAKE2_CTX_new(enum spake2_role_t my_role, const uint8_t *my_name,
   if (!CBS_stow(&my_name_cbs, &ctx->my_name, &ctx->my_name_len) ||
       !CBS_stow(&their_name_cbs, &ctx->their_name, &ctx->their_name_len)) {
     SPAKE2_CTX_free(ctx);
-    return NULL;
+    return nullptr;
   }
 
   return ctx;
 }
 
 void SPAKE2_CTX_free(SPAKE2_CTX *ctx) {
-  if (ctx == NULL) {
+  if (ctx == nullptr) {
     return;
   }
 
   OPENSSL_free(ctx->my_name);
   OPENSSL_free(ctx->their_name);
-  OPENSSL_free(ctx);
+  Delete(ctx);
 }
 
 // left_shift_3 sets |n| to |n|*8, where |n| is represented in little-endian
@@ -333,18 +337,17 @@ static const scalar kOrder = {
 // scalar_cmov copies |src| to |dest| if |mask| is all ones.
 static void scalar_cmov(scalar *dest, const scalar *src, crypto_word_t mask) {
   bn_select_words(dest->words, mask, src->words, dest->words,
-                  OPENSSL_ARRAY_SIZE(dest->words));
+                  std::size(dest->words));
 }
 
 // scalar_double sets |s| to |2×s|.
 static void scalar_double(scalar *s) {
-  bn_add_words(s->words, s->words, s->words, OPENSSL_ARRAY_SIZE(s->words));
+  bn_add_words(s->words, s->words, s->words, std::size(s->words));
 }
 
 // scalar_add sets |dest| to |dest| plus |src|.
 static void scalar_add(scalar *dest, const scalar *src) {
-  bn_add_words(dest->words, dest->words, src->words,
-               OPENSSL_ARRAY_SIZE(dest->words));
+  bn_add_words(dest->words, dest->words, src->words, std::size(dest->words));
 }
 
 int SPAKE2_generate_msg(SPAKE2_CTX *ctx, uint8_t *out, size_t *out_len,

@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_bn.h>
 
@@ -14,8 +19,11 @@
 
 #include "internal.h"
 
-void bn_big_endian_to_words(BN_ULONG *out, size_t out_len, const uint8_t *in,
-                            size_t in_len) {
+
+using namespace bssl;
+
+void bssl::bn_big_endian_to_words(BN_ULONG *out, size_t out_len,
+                                  const uint8_t *in, size_t in_len) {
   // The caller should have sized |out| to fit |in| without truncating. This
   // condition ensures we do not overflow |out|, so use a runtime check.
   BSSL_CHECK(in_len <= out_len * sizeof(BN_ULONG));
@@ -44,11 +52,11 @@ void bn_big_endian_to_words(BN_ULONG *out, size_t out_len, const uint8_t *in,
 }
 
 BIGNUM *BN_bin2bn(const uint8_t *in, size_t len, BIGNUM *ret) {
-  BIGNUM *bn = NULL;
-  if (ret == NULL) {
+  BIGNUM *bn = nullptr;
+  if (ret == nullptr) {
     bn = BN_new();
-    if (bn == NULL) {
-      return NULL;
+    if (bn == nullptr) {
+      return nullptr;
     }
     ret = bn;
   }
@@ -61,7 +69,7 @@ BIGNUM *BN_bin2bn(const uint8_t *in, size_t len, BIGNUM *ret) {
   size_t num_words = ((len - 1) / BN_BYTES) + 1;
   if (!bn_wexpand(ret, num_words)) {
     BN_free(bn);
-    return NULL;
+    return nullptr;
   }
 
   // |bn_wexpand| must check bounds on |num_words| to write it into
@@ -75,11 +83,11 @@ BIGNUM *BN_bin2bn(const uint8_t *in, size_t len, BIGNUM *ret) {
 }
 
 BIGNUM *BN_lebin2bn(const uint8_t *in, size_t len, BIGNUM *ret) {
-  BIGNUM *bn = NULL;
-  if (ret == NULL) {
+  BIGNUM *bn = nullptr;
+  if (ret == nullptr) {
     bn = BN_new();
-    if (bn == NULL) {
-      return NULL;
+    if (bn == nullptr) {
+      return nullptr;
     }
     ret = bn;
   }
@@ -94,7 +102,7 @@ BIGNUM *BN_lebin2bn(const uint8_t *in, size_t len, BIGNUM *ret) {
   size_t num_words = ((len - 1) / BN_BYTES) + 1;
   if (!bn_wexpand(ret, num_words)) {
     BN_free(bn);
-    return NULL;
+    return nullptr;
   }
   ret->width = (int)num_words;
 
@@ -124,7 +132,7 @@ static int fits_in_bytes(const BN_ULONG *words, size_t num_words,
   return mask == 0;
 }
 
-void bn_assert_fits_in_bytes(const BIGNUM *bn, size_t num) {
+void bssl::bn_assert_fits_in_bytes(const BIGNUM *bn, size_t num) {
   const uint8_t *bytes = (const uint8_t *)bn->d;
   size_t tot_bytes = bn->width * sizeof(BN_ULONG);
   if (tot_bytes > num) {
@@ -136,8 +144,8 @@ void bn_assert_fits_in_bytes(const BIGNUM *bn, size_t num) {
   }
 }
 
-void bn_words_to_big_endian(uint8_t *out, size_t out_len, const BN_ULONG *in,
-                            size_t in_len) {
+void bssl::bn_words_to_big_endian(uint8_t *out, size_t out_len,
+                                  const BN_ULONG *in, size_t in_len) {
   // The caller should have selected an output length without truncation.
   declassify_assert(fits_in_bytes(in, in_len, out_len));
 

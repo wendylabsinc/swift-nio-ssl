@@ -417,21 +417,33 @@ public final class NIOSSLContext {
             verification: configuration.certificateVerification,
             trustRoots: configuration.trustRoots,
             additionalTrustRoots: configuration.additionalTrustRoots,
-            sendCANames: configuration.sendCANameList
+            sendCANames: configuration.sendCANameList,
+            trustRootsAreTrustAnchors: configuration.trustRootsAreTrustAnchors
         )
 
-        // Configure verification algorithms
-        if let verifySignatureAlgorithms = configuration.verifySignatureAlgorithms {
-            returnCode =
-                verifySignatureAlgorithms
-                .map { $0.rawValue }
-                .withUnsafeBufferPointer { algo in
-                    CNIOBoringSSL_SSL_CTX_set_verify_algorithm_prefs(context, algo.baseAddress, algo.count)
-                }
-            if returnCode != 1 {
-                let errorStack = BoringSSLError.buildErrorStack()
-                throw BoringSSLError.unknownError(errorStack)
+        // Configure verification algorithms.
+        //
+        // When the user has not specified a list we install our own default
+        // rather than leaving BoringSSL's built-in one in place. BoringSSL's
+        // default verify list (kVerifySignatureAlgorithms) is classical-only and
+        // omits ML-DSA, even though its signing list leads with ML-DSA. That
+        // asymmetry means a peer using an unset verify list never advertises
+        // that it is willing to verify an ML-DSA signature, so an ML-DSA
+        // CertificateVerify cannot be negotiated and the handshake fails with
+        // NO_COMMON_SIGNATURE_ALGORITHMS. Since this vendored BoringSSL exists to
+        // enable ML-DSA in TLS, our default advertises ML-DSA too. See
+        // `SignatureAlgorithm.defaultVerifyAlgorithms`.
+        let verifySignatureAlgorithms =
+            configuration.verifySignatureAlgorithms ?? SignatureAlgorithm.defaultVerifyAlgorithms
+        returnCode =
+            verifySignatureAlgorithms
+            .map { $0.rawValue }
+            .withUnsafeBufferPointer { algo in
+                CNIOBoringSSL_SSL_CTX_set_verify_algorithm_prefs(context, algo.baseAddress, algo.count)
             }
+        if returnCode != 1 {
+            let errorStack = BoringSSLError.buildErrorStack()
+            throw BoringSSLError.unknownError(errorStack)
         }
 
         // Configure signing algorithms
@@ -628,6 +640,7 @@ extension NIOSSLContext {
         _ sendCANames: Bool,
         _ trustRoots: NIOSSLTrustRoots?,
         _ additionalTrustRoots: [NIOSSLAdditionalTrustRoots],
+        _ trustRootsAreTrustAnchors: Bool,
         _ verificationMode: VerificationMode
     ) throws {
         switch verificationMode {
@@ -642,6 +655,9 @@ extension NIOSSLContext {
         // This is get0 so we can just ignore the pointer, we don't have an owned ref.
         let trustParams = CNIOBoringSSL_SSL_CTX_get0_param(context)!
         CNIOBoringSSL_X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_TRUSTED_FIRST))
+        if trustRootsAreTrustAnchors {
+            CNIOBoringSSL_X509_VERIFY_PARAM_set_flags(trustParams, CUnsignedLong(X509_V_FLAG_PARTIAL_CHAIN))
+        }
 
         func configureTrustRoots(trustRoots: NIOSSLTrustRoots) throws {
             switch trustRoots {
@@ -668,15 +684,30 @@ extension NIOSSLContext {
         verification: CertificateVerification,
         trustRoots: NIOSSLTrustRoots?,
         additionalTrustRoots: [NIOSSLAdditionalTrustRoots],
-        sendCANames: Bool
+        sendCANames: Bool,
+        trustRootsAreTrustAnchors: Bool
     ) throws {
         // If validation is turned on, set the trust roots and turn on cert validation.
         switch verification {
         case .fullVerification, .noHostnameVerification:
-            try setupVerification(context, sendCANames, trustRoots, additionalTrustRoots, .peerCertificateRequired)
+            try setupVerification(
+                context,
+                sendCANames,
+                trustRoots,
+                additionalTrustRoots,
+                trustRootsAreTrustAnchors,
+                .peerCertificateRequired
+            )
         case .none(let opts):
             if opts.validatePresentedCertificates {
-                try setupVerification(context, sendCANames, trustRoots, additionalTrustRoots, .peerCertificatesOptional)
+                try setupVerification(
+                    context,
+                    sendCANames,
+                    trustRoots,
+                    additionalTrustRoots,
+                    trustRootsAreTrustAnchors,
+                    .peerCertificatesOptional
+                )
             }
         }
     }
@@ -826,7 +857,7 @@ extension NIOSSLContext {
         guard let caNameList = CNIOBoringSSL_SSL_CTX_get_client_CA_list(self.sslContext) else {
             return 0
         }
-        return CNIOBoringSSL_sk_X509_NAME_num(caNameList)
+        return CNIOBoringSSLShims_sk_X509_NAME_num(caNameList)
     }
 }
 
@@ -904,13 +935,13 @@ extension NIOSSLContext.NIOTLSCipherBuffers: RandomAccessCollection {
     }
 
     var count: Int {
-        CNIOBoringSSL_sk_SSL_CIPHER_num(self.basePointer)
+        CNIOBoringSSLShims_sk_SSL_CIPHER_num(self.basePointer)
     }
 
     subscript(position: Index) -> NIOTLSCipher {
         precondition(position < self.endIndex)
         precondition(position >= self.startIndex)
-        guard let ptr = CNIOBoringSSL_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
+        guard let ptr = CNIOBoringSSLShims_sk_SSL_CIPHER_value(self.basePointer, position.index) else {
             preconditionFailure("Unable to locate backing pointer.")
         }
         let cipherID = CNIOBoringSSL_SSL_CIPHER_get_protocol_id(ptr)

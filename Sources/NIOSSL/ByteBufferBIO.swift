@@ -33,7 +33,7 @@ import Bionic
 /// This specific type signature is annoying (I'd rather have UnsafeRawPointer, and rather than a separate
 /// len I'd like a buffer pointer), but this interface is required because this is passed to an BoringSSL
 /// function pointer and so needs to be @convention(c).
-internal func boringSSLBIOWriteFunc(bio: UnsafeMutablePointer<BIO>?, buf: UnsafePointer<CChar>?, len: CInt) -> CInt {
+internal func boringSSLBIOWriteFunc(bio: OpaquePointer?, buf: UnsafePointer<CChar>?, len: CInt) -> CInt {
     guard let concreteBIO = bio, let concreteBuf = buf else {
         preconditionFailure(
             "Invalid pointers in boringSSLBIOWriteFunc: bio: \(String(describing: bio)) buf: \(String(describing: buf))"
@@ -66,7 +66,7 @@ internal func boringSSLBIOWriteFunc(bio: UnsafeMutablePointer<BIO>?, buf: Unsafe
 /// len I'd like a buffer pointer), but this interface is required because this is passed to an BoringSSL
 /// function pointer and so needs to be @convention(c).
 internal func boringSSLBIOReadFunc(
-    bio: UnsafeMutablePointer<BIO>?,
+    bio: OpaquePointer?,
     buf: UnsafeMutablePointer<CChar>?,
     len: CInt
 ) -> CInt {
@@ -101,7 +101,7 @@ internal func boringSSLBIOReadFunc(
 /// This specific type signature is annoying (I'd rather have UnsafeRawPointer, and rather than a separate
 /// len I'd like a buffer pointer), but this interface is required because this is passed to an BoringSSL
 /// function pointer and so needs to be @convention(c).
-internal func boringSSLBIOPutsFunc(bio: UnsafeMutablePointer<BIO>?, buf: UnsafePointer<CChar>?) -> CInt {
+internal func boringSSLBIOPutsFunc(bio: OpaquePointer?, buf: UnsafePointer<CChar>?) -> CInt {
     guard let concreteBIO = bio, let concreteBuf = buf else {
         preconditionFailure(
             "Invalid pointers in boringSSLBIOPutsFunc: bio: \(String(describing: bio)) buf: \(String(describing: buf))"
@@ -117,7 +117,7 @@ internal func boringSSLBIOPutsFunc(bio: UnsafeMutablePointer<BIO>?, buf: UnsafeP
 /// len I'd like a buffer pointer), but this interface is required because this is passed to an BoringSSL
 /// function pointer and so needs to be @convention(c).
 internal func boringSSLBIOGetsFunc(
-    bio: UnsafeMutablePointer<BIO>?,
+    bio: OpaquePointer?,
     buf: UnsafeMutablePointer<CChar>?,
     len: CInt
 ) -> CInt {
@@ -126,7 +126,7 @@ internal func boringSSLBIOGetsFunc(
 
 /// The BoringSSL entry point for `BIO_ctrl`. We don't support most of these.
 internal func boringSSLBIOCtrlFunc(
-    bio: UnsafeMutablePointer<BIO>?,
+    bio: OpaquePointer?,
     cmd: CInt,
     larg: CLong,
     parg: UnsafeMutableRawPointer?
@@ -144,11 +144,11 @@ internal func boringSSLBIOCtrlFunc(
     }
 }
 
-internal func boringSSLBIOCreateFunc(bio: UnsafeMutablePointer<BIO>?) -> CInt {
+internal func boringSSLBIOCreateFunc(bio: OpaquePointer?) -> CInt {
     1
 }
 
-internal func boringSSLBIODestroyFunc(bio: UnsafeMutablePointer<BIO>?) -> CInt {
+internal func boringSSLBIODestroyFunc(bio: OpaquePointer?) -> CInt {
     1
 }
 
@@ -170,10 +170,10 @@ final class ByteBufferBIO {
     /// using a ByteBufferBIO. There will only ever be one value of this in a NIO program,
     /// and it will always be non-NULL. Failure to initialize this structure is fatal to
     /// the program.
-    nonisolated(unsafe) private static let boringSSLBIOMethod: UnsafeMutablePointer<BIO_METHOD> =
+    nonisolated(unsafe) private static let boringSSLBIOMethod: OpaquePointer =
         buildBoringSSLBIOMethod()
 
-    private static func buildBoringSSLBIOMethod() -> UnsafeMutablePointer<BIO_METHOD> {
+    private static func buildBoringSSLBIOMethod() -> OpaquePointer {
         guard boringSSLIsInitialized else {
             preconditionFailure("Failed to initialize BoringSSL")
         }
@@ -204,7 +204,7 @@ final class ByteBufferBIO {
     ///
     /// Because of this split initialization dance, we elect to initialize this data structure,
     /// and have it own building an BoringSSL `BIO` structure.
-    private let bioPtr: UnsafeMutablePointer<BIO>
+    private let bioPtr: OpaquePointer
 
     /// The buffer of bytes received from the network.
     ///
@@ -301,7 +301,7 @@ final class ByteBufferBIO {
     /// Note that the BIO may not remain useful for long periods of time: if the `ByteBufferBIO`
     /// object that owns the BIO goes out of scope, the BIO will have its pointers invalidated
     /// and will no longer be able to send/receive data.
-    internal func retainedBIO() -> UnsafeMutablePointer<BIO> {
+    internal func retainedBIO() -> OpaquePointer {
         CNIOBoringSSL_BIO_up_ref(self.bioPtr)
         return self.bioPtr
     }

@@ -1,28 +1,27 @@
-/* Copyright 2017 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2017 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ssl.h>
 
 #include <assert.h>
 
-#include <algorithm>
+#include <iterator>
 
 #include <CNIOBoringSSL_bytestring.h>
 #include <CNIOBoringSSL_err.h>
 #include <CNIOBoringSSL_span.h>
 
-#include "../crypto/internal.h"
 #include "internal.h"
 
 
@@ -90,7 +89,7 @@ bool ssl_method_supports_version(const SSL_PROTOCOL_METHOD *method,
 // The following functions map between API versions and wire versions. The
 // public API works on wire versions.
 
-static const char *kUnknownVersion = "unknown";
+static const char *const kUnknownVersion = "unknown";
 
 struct VersionInfo {
   uint16_t version;
@@ -98,12 +97,9 @@ struct VersionInfo {
 };
 
 static const VersionInfo kVersionNames[] = {
-    {TLS1_3_VERSION, "TLSv1.3"},
-    {TLS1_2_VERSION, "TLSv1.2"},
-    {TLS1_1_VERSION, "TLSv1.1"},
-    {TLS1_VERSION, "TLSv1"},
-    {DTLS1_VERSION, "DTLSv1"},
-    {DTLS1_2_VERSION, "DTLSv1.2"},
+    {TLS1_3_VERSION, "TLSv1.3"},   {TLS1_2_VERSION, "TLSv1.2"},
+    {TLS1_1_VERSION, "TLSv1.1"},   {TLS1_VERSION, "TLSv1"},
+    {DTLS1_VERSION, "DTLSv1"},     {DTLS1_2_VERSION, "DTLSv1.2"},
     {DTLS1_3_VERSION, "DTLSv1.3"},
 };
 
@@ -156,10 +152,8 @@ static bool set_min_version(const SSL_PROTOCOL_METHOD *method, uint16_t *out,
 static bool set_max_version(const SSL_PROTOCOL_METHOD *method, uint16_t *out,
                             uint16_t version) {
   // Zero is interpreted as the default maximum version.
-  // TODO(crbug.com/42290594): Enable DTLS 1.3 by default, after it's
-  // successfully shipped in WebRTC.
   if (version == 0) {
-    *out = method->is_dtls ? DTLS1_2_VERSION : TLS1_3_VERSION;
+    *out = method->is_dtls ? DTLS1_3_VERSION : TLS1_3_VERSION;
     return true;
   }
 
@@ -211,9 +205,9 @@ bool ssl_get_version_range(const SSL_HANDSHAKE *hs, uint16_t *out_min_version,
   // To account for both of these, OpenSSL interprets the client-side bitmask
   // as a min/max range by picking the lowest contiguous non-empty range of
   // enabled protocols. Note that this means it is impossible to set a maximum
-  // version of the higest supported TLS version in a future-proof way.
+  // version of the highest supported TLS version in a future-proof way.
   bool any_enabled = false;
-  for (size_t i = 0; i < OPENSSL_ARRAY_SIZE(kProtocolVersions); i++) {
+  for (size_t i = 0; i < std::size(kProtocolVersions); i++) {
     // Only look at the versions already enabled.
     if (min_version > kProtocolVersions[i].version) {
       continue;
@@ -386,6 +380,7 @@ int SSL_set_max_proto_version(SSL *ssl, uint16_t version) {
 
 uint16_t SSL_get_min_proto_version(const SSL *ssl) {
   if (!ssl->config) {
+    assert(ssl->config);
     return 0;
   }
   return ssl->config->conf_min_version;
@@ -393,6 +388,7 @@ uint16_t SSL_get_min_proto_version(const SSL *ssl) {
 
 uint16_t SSL_get_max_proto_version(const SSL *ssl) {
   if (!ssl->config) {
+    assert(ssl->config);
     return 0;
   }
   return ssl->config->conf_max_version;

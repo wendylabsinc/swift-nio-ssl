@@ -1,16 +1,16 @@
-/* Copyright 2020 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2020 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ec.h>
 
@@ -26,6 +26,10 @@
 #include "internal.h"
 
 
+using namespace bssl;
+
+namespace {
+
 // This file implements hash-to-curve, as described in RFC 9380.
 //
 // This hash-to-curve implementation is written generically with the
@@ -33,7 +37,7 @@
 // becomes a performance bottleneck, some possible optimizations by
 // specializing it to the curve:
 //
-// - Rather than using a generic |felem_exp|, specialize the exponentation to
+// - Rather than using a generic |felem_exp|, specialize the exponentiation to
 //   c2 with a faster addition chain.
 //
 // - |felem_mul| and |felem_sqr| are indirect calls to generic Montgomery
@@ -48,99 +52,91 @@
 
 // expand_message_xmd implements the operation described in section 5.3.1 of
 // RFC 9380. It returns one on success and zero on error.
-static int expand_message_xmd(const EVP_MD *md, uint8_t *out, size_t out_len,
-                              const uint8_t *msg, size_t msg_len,
-                              const uint8_t *dst, size_t dst_len) {
+int expand_message_xmd(const EVP_MD *md, uint8_t *out, size_t out_len,
+                       const uint8_t *msg, size_t msg_len, const uint8_t *dst,
+                       size_t dst_len) {
   // See https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve/issues/352
   if (dst_len == 0) {
     OPENSSL_PUT_ERROR(EC, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
     return 0;
   }
 
-  int ret = 0;
   const size_t block_size = EVP_MD_block_size(md);
   const size_t md_size = EVP_MD_size(md);
-  EVP_MD_CTX ctx;
-  EVP_MD_CTX_init(&ctx);
+  ScopedEVP_MD_CTX ctx;
 
-  {
-    // Long DSTs are hashed down to size. See section 5.3.3.
-    static_assert(EVP_MAX_MD_SIZE < 256, "hashed DST still too large");
-    uint8_t dst_buf[EVP_MAX_MD_SIZE];
-    if (dst_len >= 256) {
-      static const char kPrefix[] = "H2C-OVERSIZE-DST-";
-      if (!EVP_DigestInit_ex(&ctx, md, NULL) ||
-          !EVP_DigestUpdate(&ctx, kPrefix, sizeof(kPrefix) - 1) ||
-          !EVP_DigestUpdate(&ctx, dst, dst_len) ||
-          !EVP_DigestFinal_ex(&ctx, dst_buf, NULL)) {
-        goto err;
-      }
-      dst = dst_buf;
-      dst_len = md_size;
+  // Long DSTs are hashed down to size. See section 5.3.3.
+  static_assert(EVP_MAX_MD_SIZE < 256, "hashed DST still too large");
+  uint8_t dst_buf[EVP_MAX_MD_SIZE];
+  if (dst_len >= 256) {
+    static const char kPrefix[] = "H2C-OVERSIZE-DST-";
+    if (!EVP_DigestInit_ex(ctx.get(), md, nullptr) ||
+        !EVP_DigestUpdate(ctx.get(), kPrefix, sizeof(kPrefix) - 1) ||
+        !EVP_DigestUpdate(ctx.get(), dst, dst_len) ||
+        !EVP_DigestFinal_ex(ctx.get(), dst_buf, nullptr)) {
+      return 0;
     }
-    uint8_t dst_len_u8 = (uint8_t)dst_len;
+    dst = dst_buf;
+    dst_len = md_size;
+  }
+  uint8_t dst_len_u8 = (uint8_t)dst_len;
 
-    // Compute b_0.
-    static const uint8_t kZeros[EVP_MAX_MD_BLOCK_SIZE] = {0};
-    // If |out_len| exceeds 16 bits then |i| will wrap below causing an error to
-    // be returned. This depends on the static assert above.
-    uint8_t l_i_b_str_zero[3] = {static_cast<uint8_t>(out_len >> 8),
-                                 static_cast<uint8_t>(out_len), 0};
-    uint8_t b_0[EVP_MAX_MD_SIZE];
-    if (!EVP_DigestInit_ex(&ctx, md, NULL) ||
-        !EVP_DigestUpdate(&ctx, kZeros, block_size) ||
-        !EVP_DigestUpdate(&ctx, msg, msg_len) ||
-        !EVP_DigestUpdate(&ctx, l_i_b_str_zero, sizeof(l_i_b_str_zero)) ||
-        !EVP_DigestUpdate(&ctx, dst, dst_len) ||
-        !EVP_DigestUpdate(&ctx, &dst_len_u8, 1) ||
-        !EVP_DigestFinal_ex(&ctx, b_0, NULL)) {
-      goto err;
-    }
-
-    uint8_t b_i[EVP_MAX_MD_SIZE];
-    uint8_t i = 1;
-    while (out_len > 0) {
-      if (i == 0) {
-        // Input was too large.
-        OPENSSL_PUT_ERROR(EC, ERR_R_INTERNAL_ERROR);
-        goto err;
-      }
-      if (i > 1) {
-        for (size_t j = 0; j < md_size; j++) {
-          b_i[j] ^= b_0[j];
-        }
-      } else {
-        OPENSSL_memcpy(b_i, b_0, md_size);
-      }
-
-      if (!EVP_DigestInit_ex(&ctx, md, NULL) ||
-          !EVP_DigestUpdate(&ctx, b_i, md_size) ||
-          !EVP_DigestUpdate(&ctx, &i, 1) ||
-          !EVP_DigestUpdate(&ctx, dst, dst_len) ||
-          !EVP_DigestUpdate(&ctx, &dst_len_u8, 1) ||
-          !EVP_DigestFinal_ex(&ctx, b_i, NULL)) {
-        goto err;
-      }
-
-      size_t todo = out_len >= md_size ? md_size : out_len;
-      OPENSSL_memcpy(out, b_i, todo);
-      out += todo;
-      out_len -= todo;
-      i++;
-    }
-
-    ret = 1;
+  // Compute b_0.
+  static const uint8_t kZeros[EVP_MAX_MD_BLOCK_SIZE] = {0};
+  // If |out_len| exceeds 16 bits then |i| will wrap below causing an error to
+  // be returned. This depends on the static assert above.
+  uint8_t l_i_b_str_zero[3] = {static_cast<uint8_t>(out_len >> 8),
+                               static_cast<uint8_t>(out_len), 0};
+  uint8_t b_0[EVP_MAX_MD_SIZE];
+  if (!EVP_DigestInit_ex(ctx.get(), md, nullptr) ||
+      !EVP_DigestUpdate(ctx.get(), kZeros, block_size) ||
+      !EVP_DigestUpdate(ctx.get(), msg, msg_len) ||
+      !EVP_DigestUpdate(ctx.get(), l_i_b_str_zero, sizeof(l_i_b_str_zero)) ||
+      !EVP_DigestUpdate(ctx.get(), dst, dst_len) ||
+      !EVP_DigestUpdate(ctx.get(), &dst_len_u8, 1) ||
+      !EVP_DigestFinal_ex(ctx.get(), b_0, nullptr)) {
+    return 0;
   }
 
-err:
-  EVP_MD_CTX_cleanup(&ctx);
-  return ret;
+  uint8_t b_i[EVP_MAX_MD_SIZE];
+  uint8_t i = 1;
+  while (out_len > 0) {
+    if (i == 0) {
+      // Input was too large.
+      OPENSSL_PUT_ERROR(EC, ERR_R_INTERNAL_ERROR);
+      return 0;
+    }
+    if (i > 1) {
+      for (size_t j = 0; j < md_size; j++) {
+        b_i[j] ^= b_0[j];
+      }
+    } else {
+      OPENSSL_memcpy(b_i, b_0, md_size);
+    }
+
+    if (!EVP_DigestInit_ex(ctx.get(), md, nullptr) ||
+        !EVP_DigestUpdate(ctx.get(), b_i, md_size) ||
+        !EVP_DigestUpdate(ctx.get(), &i, 1) ||
+        !EVP_DigestUpdate(ctx.get(), dst, dst_len) ||
+        !EVP_DigestUpdate(ctx.get(), &dst_len_u8, 1) ||
+        !EVP_DigestFinal_ex(ctx.get(), b_i, nullptr)) {
+      return 0;
+    }
+
+    size_t todo = out_len >= md_size ? md_size : out_len;
+    OPENSSL_memcpy(out, b_i, todo);
+    out += todo;
+    out_len -= todo;
+    i++;
+  }
+
+  return 1;
 }
 
 // num_bytes_to_derive determines the number of bytes to derive when hashing to
 // a number modulo |modulus|. See the hash_to_field operation defined in
 // section 5.2 of RFC 9380.
-static int num_bytes_to_derive(size_t *out, const BIGNUM *modulus, unsigned k) {
+int num_bytes_to_derive(size_t *out, const BIGNUM *modulus, unsigned k) {
   size_t bits = BN_num_bits(modulus);
   size_t L = (bits + k + 7) / 8;
   // We require 2^(8*L) < 2^(2*bits - 2) <= n^2 so to fit in bounds for
@@ -159,8 +155,8 @@ static int num_bytes_to_derive(size_t *out, const BIGNUM *modulus, unsigned k) {
 
 // big_endian_to_words decodes |in| as a big-endian integer and writes the
 // result to |out|. |num_words| must be large enough to contain the output.
-static void big_endian_to_words(BN_ULONG *out, size_t num_words,
-                                const uint8_t *in, size_t len) {
+void big_endian_to_words(BN_ULONG *out, size_t num_words, const uint8_t *in,
+                         size_t len) {
   assert(len <= num_words * sizeof(BN_ULONG));
   // Ensure any excess bytes are zeroed.
   OPENSSL_memset(out, 0, num_words * sizeof(BN_ULONG));
@@ -172,10 +168,9 @@ static void big_endian_to_words(BN_ULONG *out, size_t num_words,
 
 // hash_to_field implements the operation described in section 5.2
 // of RFC 9380, with count = 2. |k| is the security factor.
-static int hash_to_field2(const EC_GROUP *group, const EVP_MD *md,
-                          EC_FELEM *out1, EC_FELEM *out2, const uint8_t *dst,
-                          size_t dst_len, unsigned k, const uint8_t *msg,
-                          size_t msg_len) {
+int hash_to_field2(const EC_GROUP *group, const EVP_MD *md, EC_FELEM *out1,
+                   EC_FELEM *out2, const uint8_t *dst, size_t dst_len,
+                   unsigned k, const uint8_t *msg, size_t msg_len) {
   size_t L;
   uint8_t buf[4 * EC_MAX_BYTES];
   if (!num_bytes_to_derive(&L, &group->field.N, k) ||
@@ -191,11 +186,29 @@ static int hash_to_field2(const EC_GROUP *group, const EVP_MD *md,
   return 1;
 }
 
+// hash_to_field1 implements the operation described in section 5.2
+// of RFC 9380, with count = 1. |k| is the security factor.
+int hash_to_field1(const EC_GROUP *group, const EVP_MD *md, EC_FELEM *out,
+                   const uint8_t *dst, size_t dst_len, unsigned k,
+                   const uint8_t *msg, size_t msg_len) {
+  size_t L;
+  uint8_t buf[2 * EC_MAX_BYTES];
+  if (!num_bytes_to_derive(&L, &group->field.N, k) ||
+      !expand_message_xmd(md, buf, L, msg, msg_len, dst, dst_len)) {
+    return 0;
+  }
+  BN_ULONG words[2 * EC_MAX_WORDS];
+  size_t num_words = 2 * group->field.N.width;
+  big_endian_to_words(words, num_words, buf, L);
+  group->meth->felem_reduce(group, out, words, num_words);
+  return 1;
+}
+
 // hash_to_scalar behaves like |hash_to_field2| but returns a value modulo the
 // group order rather than a field element. |k| is the security factor.
-static int hash_to_scalar(const EC_GROUP *group, const EVP_MD *md,
-                          EC_SCALAR *out, const uint8_t *dst, size_t dst_len,
-                          unsigned k, const uint8_t *msg, size_t msg_len) {
+int hash_to_scalar(const EC_GROUP *group, const EVP_MD *md, EC_SCALAR *out,
+                   const uint8_t *dst, size_t dst_len, unsigned k,
+                   const uint8_t *msg, size_t msg_len) {
   const BIGNUM *order = EC_GROUP_get0_order(group);
   size_t L;
   uint8_t buf[EC_MAX_BYTES * 2];
@@ -211,8 +224,7 @@ static int hash_to_scalar(const EC_GROUP *group, const EVP_MD *md,
   return 1;
 }
 
-static inline void mul_A(const EC_GROUP *group, EC_FELEM *out,
-                         const EC_FELEM *in) {
+void mul_A(const EC_GROUP *group, EC_FELEM *out, const EC_FELEM *in) {
   assert(group->a_is_minus3);
   EC_FELEM tmp;
   ec_felem_add(group, &tmp, in, in);      // tmp = 2*in
@@ -221,7 +233,7 @@ static inline void mul_A(const EC_GROUP *group, EC_FELEM *out,
 }
 
 // sgn0 implements the operation described in section 4.1.2 of RFC 9380.
-static BN_ULONG sgn0(const EC_GROUP *group, const EC_FELEM *a) {
+BN_ULONG sgn0(const EC_GROUP *group, const EC_FELEM *a) {
   uint8_t buf[EC_MAX_BYTES];
   size_t len;
   ec_felem_to_bytes(group, buf, &len, a);
@@ -234,10 +246,10 @@ static BN_ULONG sgn0(const EC_GROUP *group, const EC_FELEM *a) {
 
 // sqrt_ratio_3mod4 implements the operation described in appendix F.2.1.2
 // of RFC 9380.
-static BN_ULONG sqrt_ratio_3mod4(const EC_GROUP *group, const EC_FELEM *Z,
-                                 const BN_ULONG *c1, size_t num_c1,
-                                 const EC_FELEM *c2, EC_FELEM *out_y,
-                                 const EC_FELEM *u, const EC_FELEM *v) {
+BN_ULONG sqrt_ratio_3mod4(const EC_GROUP *group, const EC_FELEM *Z,
+                          const BN_ULONG *c1, size_t num_c1, const EC_FELEM *c2,
+                          EC_FELEM *out_y, const EC_FELEM *u,
+                          const EC_FELEM *v) {
   assert(is_3mod4(group));
 
   void (*const felem_mul)(const EC_GROUP *, EC_FELEM *r, const EC_FELEM *a,
@@ -269,10 +281,10 @@ static BN_ULONG sqrt_ratio_3mod4(const EC_GROUP *group, const EC_FELEM *Z,
 
 // map_to_curve_simple_swu implements the operation described in section 6.6.2
 // of RFC 9380, using the straight-line implementation in appendix F.2.
-static void map_to_curve_simple_swu(const EC_GROUP *group, const EC_FELEM *Z,
-                                    const BN_ULONG *c1, size_t num_c1,
-                                    const EC_FELEM *c2, EC_JACOBIAN *out,
-                                    const EC_FELEM *u) {
+void map_to_curve_simple_swu(const EC_GROUP *group, const EC_FELEM *Z,
+                             const BN_ULONG *c1, size_t num_c1,
+                             const EC_FELEM *c2, EC_JACOBIAN *out,
+                             const EC_FELEM *u) {
   // This function requires the prime be 3 mod 4, and that A = -3.
   assert(is_3mod4(group));
   assert(group->a_is_minus3);
@@ -340,10 +352,10 @@ static void map_to_curve_simple_swu(const EC_GROUP *group, const EC_FELEM *Z,
   out->Z = tv4;
 }
 
-static int hash_to_curve(const EC_GROUP *group, const EVP_MD *md,
-                         const EC_FELEM *Z, const EC_FELEM *c2, unsigned k,
-                         EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
-                         const uint8_t *msg, size_t msg_len) {
+int hash_to_curve(const EC_GROUP *group, const EVP_MD *md, const EC_FELEM *Z,
+                  const EC_FELEM *c2, unsigned k, EC_JACOBIAN *out,
+                  const uint8_t *dst, size_t dst_len, const uint8_t *msg,
+                  size_t msg_len) {
   EC_FELEM u0, u1;
   if (!hash_to_field2(group, md, &u0, &u1, dst, dst_len, k, msg, msg_len)) {
     return 0;
@@ -366,7 +378,29 @@ static int hash_to_curve(const EC_GROUP *group, const EVP_MD *md,
   return 1;
 }
 
-static int felem_from_u8(const EC_GROUP *group, EC_FELEM *out, uint8_t a) {
+int encode_to_curve(const EC_GROUP *group, const EVP_MD *md, const EC_FELEM *Z,
+                    const EC_FELEM *c2, unsigned k, EC_JACOBIAN *out,
+                    const uint8_t *dst, size_t dst_len, const uint8_t *msg,
+                    size_t msg_len) {
+  EC_FELEM u;
+  if (!hash_to_field1(group, md, &u, dst, dst_len, k, msg, msg_len)) {
+    return 0;
+  }
+
+  // Compute |c1| = (p - 3) / 4.
+  BN_ULONG c1[EC_MAX_WORDS];
+  size_t num_c1 = group->field.N.width;
+  if (!bn_copy_words(c1, num_c1, &group->field.N)) {
+    return 0;
+  }
+  bn_rshift_words(c1, c1, /*shift=*/2, /*num=*/num_c1);
+
+  map_to_curve_simple_swu(group, Z, c1, num_c1, c2, out, &u);
+  // All our curves have cofactor one, so |clear_cofactor| is a no-op.
+  return 1;
+}
+
+int felem_from_u8(const EC_GROUP *group, EC_FELEM *out, uint8_t a) {
   uint8_t bytes[EC_MAX_BYTES] = {0};
   size_t len = BN_num_bytes(&group->field.N);
   bytes[len - 1] = a;
@@ -380,10 +414,10 @@ static int felem_from_u8(const EC_GROUP *group, EC_FELEM *out, uint8_t a) {
 // c2 = pow(10, (p+1)//4, p)
 // assert pow(c2, 2, p) == 10
 // ", ".join("0x%02x" % b for b in c2.to_bytes(256//8, 'big'))
-static const uint8_t kP256Sqrt10[] = {
-    0xda, 0x53, 0x8e, 0x3b, 0xe1, 0xd8, 0x9b, 0x99, 0xc9, 0x78, 0xfc,
-    0x67, 0x51, 0x80, 0xaa, 0xb2, 0x7b, 0x8d, 0x1f, 0xf8, 0x4c, 0x55,
-    0xd5, 0xb6, 0x2c, 0xcd, 0x34, 0x27, 0xe4, 0x33, 0xc4, 0x7f};
+const uint8_t kP256Sqrt10[] = {0xda, 0x53, 0x8e, 0x3b, 0xe1, 0xd8, 0x9b, 0x99,
+                               0xc9, 0x78, 0xfc, 0x67, 0x51, 0x80, 0xaa, 0xb2,
+                               0x7b, 0x8d, 0x1f, 0xf8, 0x4c, 0x55, 0xd5, 0xb6,
+                               0x2c, 0xcd, 0x34, 0x27, 0xe4, 0x33, 0xc4, 0x7f};
 
 // kP384Sqrt12 is sqrt(12) in P-384's field. It was computed as follows in
 // python3:
@@ -392,16 +426,17 @@ static const uint8_t kP256Sqrt10[] = {
 // c2 = pow(12, (p+1)//4, p)
 // assert pow(c2, 2, p) == 12
 // ", ".join("0x%02x" % b for b in c2.to_bytes(384//8, 'big'))
-static const uint8_t kP384Sqrt12[] = {
+const uint8_t kP384Sqrt12[] = {
     0x2a, 0xcc, 0xb4, 0xa6, 0x56, 0xb0, 0x24, 0x9c, 0x71, 0xf0, 0x50, 0x0e,
     0x83, 0xda, 0x2f, 0xdd, 0x7f, 0x98, 0xe3, 0x83, 0xd6, 0x8b, 0x53, 0x87,
     0x1f, 0x87, 0x2f, 0xcb, 0x9c, 0xcb, 0x80, 0xc5, 0x3c, 0x0d, 0xe1, 0xf8,
     0xa8, 0x0f, 0x7e, 0x19, 0x14, 0xe2, 0xec, 0x69, 0xf5, 0xa6, 0x26, 0xb3};
 
-int ec_hash_to_curve_p256_xmd_sha256_sswu(const EC_GROUP *group,
-                                          EC_JACOBIAN *out, const uint8_t *dst,
-                                          size_t dst_len, const uint8_t *msg,
-                                          size_t msg_len) {
+}  // namespace
+
+int bssl::ec_hash_to_curve_p256_xmd_sha256_sswu(
+    const EC_GROUP *group, EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
+    const uint8_t *msg, size_t msg_len) {
   // See section 8.3 of RFC 9380.
   if (EC_GROUP_get_curve_name(group) != NID_X9_62_prime256v1) {
     OPENSSL_PUT_ERROR(EC, EC_R_GROUP_MISMATCH);
@@ -423,7 +458,7 @@ int ec_hash_to_curve_p256_xmd_sha256_sswu(const EC_GROUP *group,
 int EC_hash_to_curve_p256_xmd_sha256_sswu(const EC_GROUP *group, EC_POINT *out,
                                           const uint8_t *dst, size_t dst_len,
                                           const uint8_t *msg, size_t msg_len) {
-  if (EC_GROUP_cmp(group, out->group, NULL) != 0) {
+  if (EC_GROUP_cmp(group, out->group, nullptr) != 0) {
     OPENSSL_PUT_ERROR(EC, EC_R_INCOMPATIBLE_OBJECTS);
     return 0;
   }
@@ -431,10 +466,9 @@ int EC_hash_to_curve_p256_xmd_sha256_sswu(const EC_GROUP *group, EC_POINT *out,
                                                msg, msg_len);
 }
 
-int ec_hash_to_curve_p384_xmd_sha384_sswu(const EC_GROUP *group,
-                                          EC_JACOBIAN *out, const uint8_t *dst,
-                                          size_t dst_len, const uint8_t *msg,
-                                          size_t msg_len) {
+int bssl::ec_hash_to_curve_p384_xmd_sha384_sswu(
+    const EC_GROUP *group, EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
+    const uint8_t *msg, size_t msg_len) {
   // See section 8.3 of RFC 9380.
   if (EC_GROUP_get_curve_name(group) != NID_secp384r1) {
     OPENSSL_PUT_ERROR(EC, EC_R_GROUP_MISMATCH);
@@ -456,7 +490,7 @@ int ec_hash_to_curve_p384_xmd_sha384_sswu(const EC_GROUP *group,
 int EC_hash_to_curve_p384_xmd_sha384_sswu(const EC_GROUP *group, EC_POINT *out,
                                           const uint8_t *dst, size_t dst_len,
                                           const uint8_t *msg, size_t msg_len) {
-  if (EC_GROUP_cmp(group, out->group, NULL) != 0) {
+  if (EC_GROUP_cmp(group, out->group, nullptr) != 0) {
     OPENSSL_PUT_ERROR(EC, EC_R_INCOMPATIBLE_OBJECTS);
     return 0;
   }
@@ -464,9 +498,76 @@ int EC_hash_to_curve_p384_xmd_sha384_sswu(const EC_GROUP *group, EC_POINT *out,
                                                msg, msg_len);
 }
 
-int ec_hash_to_scalar_p384_xmd_sha384(const EC_GROUP *group, EC_SCALAR *out,
-                                      const uint8_t *dst, size_t dst_len,
-                                      const uint8_t *msg, size_t msg_len) {
+int bssl::ec_encode_to_curve_p256_xmd_sha256_sswu(
+    const EC_GROUP *group, EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
+    const uint8_t *msg, size_t msg_len) {
+  // See section 8.3 of RFC 9380.
+  if (EC_GROUP_get_curve_name(group) != NID_X9_62_prime256v1) {
+    OPENSSL_PUT_ERROR(EC, EC_R_GROUP_MISMATCH);
+    return 0;
+  }
+
+  // Z = -10, c2 = sqrt(10)
+  EC_FELEM Z, c2;
+  if (!felem_from_u8(group, &Z, 10) ||
+      !ec_felem_from_bytes(group, &c2, kP256Sqrt10, sizeof(kP256Sqrt10))) {
+    return 0;
+  }
+  ec_felem_neg(group, &Z, &Z);
+
+  return encode_to_curve(group, EVP_sha256(), &Z, &c2, /*k=*/128, out, dst,
+                         dst_len, msg, msg_len);
+}
+
+int EC_encode_to_curve_p256_xmd_sha256_sswu(const EC_GROUP *group,
+                                            EC_POINT *out, const uint8_t *dst,
+                                            size_t dst_len, const uint8_t *msg,
+                                            size_t msg_len) {
+  if (EC_GROUP_cmp(group, out->group, nullptr) != 0) {
+    OPENSSL_PUT_ERROR(EC, EC_R_INCOMPATIBLE_OBJECTS);
+    return 0;
+  }
+  return ec_encode_to_curve_p256_xmd_sha256_sswu(group, &out->raw, dst, dst_len,
+                                                 msg, msg_len);
+}
+
+int bssl::ec_encode_to_curve_p384_xmd_sha384_sswu(
+    const EC_GROUP *group, EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
+    const uint8_t *msg, size_t msg_len) {
+  // See section 8.3 of RFC 9380.
+  if (EC_GROUP_get_curve_name(group) != NID_secp384r1) {
+    OPENSSL_PUT_ERROR(EC, EC_R_GROUP_MISMATCH);
+    return 0;
+  }
+
+  // Z = -12, c2 = sqrt(12)
+  EC_FELEM Z, c2;
+  if (!felem_from_u8(group, &Z, 12) ||
+      !ec_felem_from_bytes(group, &c2, kP384Sqrt12, sizeof(kP384Sqrt12))) {
+    return 0;
+  }
+  ec_felem_neg(group, &Z, &Z);
+
+  return encode_to_curve(group, EVP_sha384(), &Z, &c2, /*k=*/192, out, dst,
+                         dst_len, msg, msg_len);
+}
+
+int EC_encode_to_curve_p384_xmd_sha384_sswu(const EC_GROUP *group,
+                                            EC_POINT *out, const uint8_t *dst,
+                                            size_t dst_len, const uint8_t *msg,
+                                            size_t msg_len) {
+  if (EC_GROUP_cmp(group, out->group, nullptr) != 0) {
+    OPENSSL_PUT_ERROR(EC, EC_R_INCOMPATIBLE_OBJECTS);
+    return 0;
+  }
+  return ec_encode_to_curve_p384_xmd_sha384_sswu(group, &out->raw, dst, dst_len,
+                                                 msg, msg_len);
+}
+
+int bssl::ec_hash_to_scalar_p384_xmd_sha384(const EC_GROUP *group,
+                                            EC_SCALAR *out, const uint8_t *dst,
+                                            size_t dst_len, const uint8_t *msg,
+                                            size_t msg_len) {
   if (EC_GROUP_get_curve_name(group) != NID_secp384r1) {
     OPENSSL_PUT_ERROR(EC, EC_R_GROUP_MISMATCH);
     return 0;
@@ -476,7 +577,7 @@ int ec_hash_to_scalar_p384_xmd_sha384(const EC_GROUP *group, EC_SCALAR *out,
                         msg_len);
 }
 
-int ec_hash_to_curve_p384_xmd_sha512_sswu_draft07(
+int bssl::ec_hash_to_curve_p384_xmd_sha512_sswu_draft07(
     const EC_GROUP *group, EC_JACOBIAN *out, const uint8_t *dst, size_t dst_len,
     const uint8_t *msg, size_t msg_len) {
   // See section 8.3 of draft-irtf-cfrg-hash-to-curve-07.
@@ -497,7 +598,7 @@ int ec_hash_to_curve_p384_xmd_sha512_sswu_draft07(
                        dst_len, msg, msg_len);
 }
 
-int ec_hash_to_scalar_p384_xmd_sha512_draft07(
+int bssl::ec_hash_to_scalar_p384_xmd_sha512_draft07(
     const EC_GROUP *group, EC_SCALAR *out, const uint8_t *dst, size_t dst_len,
     const uint8_t *msg, size_t msg_len) {
   if (EC_GROUP_get_curve_name(group) != NID_secp384r1) {

@@ -1,11 +1,18 @@
-/*
- * Copyright 2003-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 2003-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <string_view>
 
 #include <stdio.h>
 #include <string.h>
@@ -15,12 +22,14 @@
 #include <CNIOBoringSSL_err.h>
 #include <CNIOBoringSSL_mem.h>
 #include <CNIOBoringSSL_obj.h>
+#include <CNIOBoringSSL_span.h>
 #include <CNIOBoringSSL_x509.h>
 
 #include "../internal.h"
-#include "ext_dat.h"
 #include "internal.h"
 
+
+using namespace bssl;
 
 static void *v2i_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method,
                                   const X509V3_CTX *ctx,
@@ -28,32 +37,36 @@ static void *v2i_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method,
 static int i2r_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method, void *a,
                                 BIO *bp, int ind);
 static int do_i2r_name_constraints(const X509V3_EXT_METHOD *method,
-                                   STACK_OF(GENERAL_SUBTREE) *trees, BIO *bp,
-                                   int ind, const char *name);
+                                   const STACK_OF(GENERAL_SUBTREE) *trees,
+                                   BIO *bp, int ind, const char *name);
 static int print_nc_ipadd(BIO *bp, const ASN1_OCTET_STRING *ip);
 
-static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc);
-static int nc_match_single(GENERAL_NAME *sub, GENERAL_NAME *gen);
-static int nc_dn(X509_NAME *sub, X509_NAME *nm);
-static int nc_dns(const ASN1_IA5STRING *sub, const ASN1_IA5STRING *dns);
-static int nc_email(const ASN1_IA5STRING *sub, const ASN1_IA5STRING *eml);
+static int nc_match(const GENERAL_NAME *gen, const NAME_CONSTRAINTS *nc,
+                    bool case_insensitive_exclude_localpart);
+static int nc_match_single(const GENERAL_NAME *sub, const GENERAL_NAME *gen,
+                           bool excluding, bool case_insensitive_local_part);
+static int nc_dn(const X509_NAME *sub, const X509_NAME *nm);
+static int nc_dns(const ASN1_IA5STRING *sub, const ASN1_IA5STRING *dns,
+                  bool excluding);
+static int nc_email(const ASN1_IA5STRING *sub, const ASN1_IA5STRING *eml,
+                    bool case_insensitive_local_part);
 static int nc_uri(const ASN1_IA5STRING *uri, const ASN1_IA5STRING *base);
 
-const X509V3_EXT_METHOD v3_name_constraints = {
+const X509V3_EXT_METHOD bssl::v3_name_constraints = {
     NID_name_constraints,
     0,
     ASN1_ITEM_ref(NAME_CONSTRAINTS),
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
     v2i_NAME_CONSTRAINTS,
     i2r_NAME_CONSTRAINTS,
-    0,
-    NULL,
+    nullptr,
+    nullptr,
 };
 
 ASN1_SEQUENCE(GENERAL_SUBTREE) = {
@@ -76,9 +89,9 @@ IMPLEMENT_ASN1_ALLOC_FUNCTIONS(NAME_CONSTRAINTS)
 static void *v2i_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method,
                                   const X509V3_CTX *ctx,
                                   const STACK_OF(CONF_VALUE) *nval) {
-  STACK_OF(GENERAL_SUBTREE) **ptree = NULL;
-  NAME_CONSTRAINTS *ncons = NULL;
-  GENERAL_SUBTREE *sub = NULL;
+  STACK_OF(GENERAL_SUBTREE) **ptree = nullptr;
+  NAME_CONSTRAINTS *ncons = nullptr;
+  GENERAL_SUBTREE *sub = nullptr;
   ncons = NAME_CONSTRAINTS_new();
   if (!ncons) {
     goto err;
@@ -107,7 +120,7 @@ static void *v2i_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method,
     if (!*ptree || !sk_GENERAL_SUBTREE_push(*ptree, sub)) {
       goto err;
     }
-    sub = NULL;
+    sub = nullptr;
   }
 
   return ncons;
@@ -115,7 +128,7 @@ static void *v2i_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method,
 err:
   NAME_CONSTRAINTS_free(ncons);
   GENERAL_SUBTREE_free(sub);
-  return NULL;
+  return nullptr;
 }
 
 static int i2r_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method, void *a,
@@ -128,15 +141,12 @@ static int i2r_NAME_CONSTRAINTS(const X509V3_EXT_METHOD *method, void *a,
 }
 
 static int do_i2r_name_constraints(const X509V3_EXT_METHOD *method,
-                                   STACK_OF(GENERAL_SUBTREE) *trees, BIO *bp,
-                                   int ind, const char *name) {
-  GENERAL_SUBTREE *tree;
-  size_t i;
+                                   const STACK_OF(GENERAL_SUBTREE) *trees,
+                                   BIO *bp, int ind, const char *name) {
   if (sk_GENERAL_SUBTREE_num(trees) > 0) {
     BIO_printf(bp, "%*s%s:\n", ind, "", name);
   }
-  for (i = 0; i < sk_GENERAL_SUBTREE_num(trees); i++) {
-    tree = sk_GENERAL_SUBTREE_value(trees, i);
+  for (const GENERAL_SUBTREE *tree : trees) {
     BIO_printf(bp, "%*s", ind + 2, "");
     if (tree->base->type == GEN_IPADD) {
       print_nc_ipadd(bp, tree->base->d.ip);
@@ -187,18 +197,15 @@ static int print_nc_ipadd(BIO *bp, const ASN1_OCTET_STRING *ip) {
 //     syntax.
 //   X509_V_ERR_UNSUPPORTED_NAME_SYNTAX: Bad or unsupported syntax of name.
 
-int NAME_CONSTRAINTS_check(X509 *x, NAME_CONSTRAINTS *nc) {
-  int r, i;
-  size_t j;
-  X509_NAME *nm;
-
-  nm = X509_get_subject_name(x);
+int NAME_CONSTRAINTS_check(const X509 *x, const NAME_CONSTRAINTS *nc) {
+  const X509_NAME *nm = X509_get_subject_name(x);
 
   // Guard against certificates with an excessive number of names or
   // constraints causing a computationally expensive name constraints
   // check.
+  const auto *x_impl = FromOpaque(x);
   size_t name_count =
-      X509_NAME_entry_count(nm) + sk_GENERAL_NAME_num(x->altname);
+      X509_NAME_entry_count(nm) + sk_GENERAL_NAME_num(x_impl->altname);
   size_t constraint_count = sk_GENERAL_SUBTREE_num(nc->permittedSubtrees) +
                             sk_GENERAL_SUBTREE_num(nc->excludedSubtrees);
   size_t check_count = constraint_count * name_count;
@@ -212,10 +219,9 @@ int NAME_CONSTRAINTS_check(X509 *x, NAME_CONSTRAINTS *nc) {
   if (X509_NAME_entry_count(nm) > 0) {
     GENERAL_NAME gntmp;
     gntmp.type = GEN_DIRNAME;
-    gntmp.d.directoryName = nm;
+    gntmp.d.directoryName = const_cast<X509_NAME *>(nm);
 
-    r = nc_match(&gntmp, nc);
-
+    int r = nc_match(&gntmp, nc, /*case_insensitive_exclude_localpart=*/false);
     if (r != X509_V_OK) {
       return r;
     }
@@ -223,8 +229,7 @@ int NAME_CONSTRAINTS_check(X509 *x, NAME_CONSTRAINTS *nc) {
     gntmp.type = GEN_EMAIL;
 
     // Process any email address attributes in subject name
-
-    for (i = -1;;) {
+    for (int i = -1;;) {
       i = X509_NAME_get_index_by_NID(nm, NID_pkcs9_emailAddress, i);
       if (i == -1) {
         break;
@@ -235,17 +240,26 @@ int NAME_CONSTRAINTS_check(X509 *x, NAME_CONSTRAINTS *nc) {
         return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
       }
 
-      r = nc_match(&gntmp, nc);
-
+      // Whether local_part should be matched case-sensitive or not is somewhat
+      // unclear. RFC 2821 says that it should be case-sensitive. RFC 2985 says
+      // that emailAddress attributes in a Name are fully case-insensitive.
+      // Some other verifier implementations always do local-part comparison
+      // case-sensitive, while some always do it case-insensitive. Many but not
+      // all SMTP servers interpret addresses as case-insensitive.
+      //
+      // Give how poorly specified this is, and the conflicting implementations
+      // in the wild, this implementation will do case-insensitive match for
+      // excluded names from the subject to avoid potentially allowing
+      // something that wasn't expected.
+      r = nc_match(&gntmp, nc, /*case_insensitive_exclude_localpart=*/true);
       if (r != X509_V_OK) {
         return r;
       }
     }
   }
 
-  for (j = 0; j < sk_GENERAL_NAME_num(x->altname); j++) {
-    GENERAL_NAME *gen = sk_GENERAL_NAME_value(x->altname, j);
-    r = nc_match(gen, nc);
+  for (const GENERAL_NAME *gen : x_impl->altname) {
+    int r = nc_match(gen, nc, /*case_insensitive_exclude_localpart=*/false);
     if (r != X509_V_OK) {
       return r;
     }
@@ -254,16 +268,12 @@ int NAME_CONSTRAINTS_check(X509 *x, NAME_CONSTRAINTS *nc) {
   return X509_V_OK;
 }
 
-static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc) {
-  GENERAL_SUBTREE *sub;
-  int r, match = 0;
-  size_t i;
-
+static int nc_match(const GENERAL_NAME *gen, const NAME_CONSTRAINTS *nc,
+                    bool case_insensitive_exclude_localpart) {
   // Permitted subtrees: if any subtrees exist of matching the type at
   // least one subtree must match.
-
-  for (i = 0; i < sk_GENERAL_SUBTREE_num(nc->permittedSubtrees); i++) {
-    sub = sk_GENERAL_SUBTREE_value(nc->permittedSubtrees, i);
+  int match = 0;
+  for (const GENERAL_SUBTREE *sub : nc->permittedSubtrees) {
     if (gen->type != sub->base->type) {
       continue;
     }
@@ -277,7 +287,8 @@ static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc) {
     if (match == 0) {
       match = 1;
     }
-    r = nc_match_single(gen, sub->base);
+    int r = nc_match_single(gen, sub->base, /*excluding=*/false,
+                            /*case_insensitive_local_part=*/false);
     if (r == X509_V_OK) {
       match = 2;
     } else if (r != X509_V_ERR_PERMITTED_VIOLATION) {
@@ -290,9 +301,7 @@ static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc) {
   }
 
   // Excluded subtrees: must not match any of these
-
-  for (i = 0; i < sk_GENERAL_SUBTREE_num(nc->excludedSubtrees); i++) {
-    sub = sk_GENERAL_SUBTREE_value(nc->excludedSubtrees, i);
+  for (const GENERAL_SUBTREE *sub : nc->excludedSubtrees) {
     if (gen->type != sub->base->type) {
       continue;
     }
@@ -300,7 +309,9 @@ static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc) {
       return X509_V_ERR_SUBTREE_MINMAX;
     }
 
-    r = nc_match_single(gen, sub->base);
+    int r = nc_match_single(gen, sub->base, /*excluding=*/true,
+                            /*case_insensitive_local_part=*/
+                            case_insensitive_exclude_localpart);
     if (r == X509_V_OK) {
       return X509_V_ERR_EXCLUDED_VIOLATION;
     } else if (r != X509_V_ERR_PERMITTED_VIOLATION) {
@@ -311,16 +322,18 @@ static int nc_match(GENERAL_NAME *gen, NAME_CONSTRAINTS *nc) {
   return X509_V_OK;
 }
 
-static int nc_match_single(GENERAL_NAME *gen, GENERAL_NAME *base) {
+static int nc_match_single(const GENERAL_NAME *gen, const GENERAL_NAME *base,
+                           bool excluding, bool case_insensitive_local_part) {
   switch (base->type) {
     case GEN_DIRNAME:
       return nc_dn(gen->d.directoryName, base->d.directoryName);
 
     case GEN_DNS:
-      return nc_dns(gen->d.dNSName, base->d.dNSName);
+      return nc_dns(gen->d.dNSName, base->d.dNSName, excluding);
 
     case GEN_EMAIL:
-      return nc_email(gen->d.rfc822Name, base->d.rfc822Name);
+      return nc_email(gen->d.rfc822Name, base->d.rfc822Name,
+                      case_insensitive_local_part);
 
     case GEN_URI:
       return nc_uri(gen->d.uniformResourceIdentifier,
@@ -331,22 +344,24 @@ static int nc_match_single(GENERAL_NAME *gen, GENERAL_NAME *base) {
   }
 }
 
-// directoryName name constraint matching. The canonical encoding of
-// X509_NAME makes this comparison easy. It is matched if the subtree is a
-// subset of the name.
+// directoryName name constraint matching. The canonical encoding of X509_NAME
+// makes this comparison easy. It is matched if the constraint is a prefix of
+// the name.
 
-static int nc_dn(X509_NAME *nm, X509_NAME *base) {
-  // Ensure canonical encodings are up to date.
-  if (nm->modified && i2d_X509_NAME(nm, NULL) < 0) {
+static int nc_dn(const X509_NAME *nm, const X509_NAME *base) {
+  const X509_NAME_CACHE *nm_cache = x509_name_get_cache(nm);
+  if (nm_cache == nullptr) {
     return X509_V_ERR_OUT_OF_MEM;
   }
-  if (base->modified && i2d_X509_NAME(base, NULL) < 0) {
+  const X509_NAME_CACHE *base_cache = x509_name_get_cache(base);
+  if (base_cache == nullptr) {
     return X509_V_ERR_OUT_OF_MEM;
   }
-  if (base->canon_enclen > nm->canon_enclen) {
+  if (base_cache->canon.size() > nm_cache->canon.size()) {
     return X509_V_ERR_PERMITTED_VIOLATION;
   }
-  if (OPENSSL_memcmp(base->canon_enc, nm->canon_enc, base->canon_enclen)) {
+  if (base_cache->canon !=
+      Span(nm_cache->canon).first(base_cache->canon.size())) {
     return X509_V_ERR_PERMITTED_VIOLATION;
   }
   return X509_V_OK;
@@ -354,6 +369,15 @@ static int nc_dn(X509_NAME *nm, X509_NAME *base) {
 
 static int starts_with(const CBS *cbs, uint8_t c) {
   return CBS_len(cbs) > 0 && CBS_data(cbs)[0] == c;
+}
+
+static int starts_with_str(const CBS *cbs, std::string_view str) {
+  return CBS_len(cbs) >= str.size() &&
+         !OPENSSL_memcmp(CBS_data(cbs), str.data(), str.size());
+}
+
+static int ends_with(const CBS *cbs, uint8_t c) {
+  return CBS_len(cbs) > 0 && CBS_data(cbs)[CBS_len(cbs) - 1] == c;
 }
 
 static int equal_case(const CBS *a, const CBS *b) {
@@ -380,7 +404,38 @@ static int has_suffix_case(const CBS *a, const CBS *b) {
   return equal_case(&copy, b);
 }
 
-static int nc_dns(const ASN1_IA5STRING *dns, const ASN1_IA5STRING *base) {
+static bool is_allowed_rfc822_local_part(const CBS *cbs) {
+  if (CBS_len(cbs) == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < CBS_len(cbs); i++) {
+    uint8_t c = CBS_data(cbs)[i];
+    if (!(OPENSSL_isalnum(c) || c == '!' || c == '#' || c == '$' || c == '%' ||
+          c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' ||
+          c == '/' || c == '=' || c == '?' || c == '^' || c == '_' ||
+          c == '`' || c == '{' || c == '|' || c == '}' || c == '~' ||
+          c == '.')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool is_allowed_rfc822_domain(const CBS *cbs) {
+  if (CBS_len(cbs) == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < CBS_len(cbs); i++) {
+    uint8_t c = CBS_data(cbs)[i];
+    if (!(OPENSSL_isalnum(c) || c == '-' || c == '.')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static int nc_dns(const ASN1_IA5STRING *dns, const ASN1_IA5STRING *base,
+                  bool excluding) {
   CBS dns_cbs, base_cbs;
   CBS_init(&dns_cbs, dns->data, dns->length);
   CBS_init(&base_cbs, base->data, base->length);
@@ -388,6 +443,34 @@ static int nc_dns(const ASN1_IA5STRING *dns, const ASN1_IA5STRING *base) {
   // Empty matches everything
   if (CBS_len(&base_cbs) == 0) {
     return X509_V_OK;
+  }
+
+  // Normalize absolute DNS names by removing the trailing dot, if any.
+  if (ends_with(&dns_cbs, '.')) {
+    uint8_t unused;
+    CBS_get_last_u8(&dns_cbs, &unused);
+  }
+  if (ends_with(&base_cbs, '.')) {
+    uint8_t unused;
+    CBS_get_last_u8(&base_cbs, &unused);
+  }
+
+  // Wildcard partial-match handling ("*.bar.com" matching name constraint
+  // "foo.bar.com"). This only handles the case where the the dnsname and the
+  // constraint match after removing the leftmost label, otherwise it is handled
+  // by falling through to the check of whether the dnsname is fully within or
+  // fully outside of the constraint.
+  if (excluding && starts_with_str(&dns_cbs, "*.")) {
+    CBS unused;
+    CBS base_parent_cbs = base_cbs;
+    CBS dns_parent_cbs = dns_cbs;
+    CBS_skip(&dns_parent_cbs, 2);
+    if (CBS_get_until_first(&base_parent_cbs, &unused, '.') &&
+        CBS_skip(&base_parent_cbs, 1)) {
+      if (equal_case(&dns_parent_cbs, &base_parent_cbs)) {
+        return X509_V_OK;
+      }
+    }
   }
 
   // If |base_cbs| begins with a '.', do a simple suffix comparison. This is
@@ -416,52 +499,89 @@ static int nc_dns(const ASN1_IA5STRING *dns, const ASN1_IA5STRING *base) {
   return X509_V_OK;
 }
 
-static int nc_email(const ASN1_IA5STRING *eml, const ASN1_IA5STRING *base) {
+static int nc_email(const ASN1_IA5STRING *eml, const ASN1_IA5STRING *base,
+                    bool case_insensitive_local_part) {
   CBS eml_cbs, base_cbs;
   CBS_init(&eml_cbs, eml->data, eml->length);
   CBS_init(&base_cbs, base->data, base->length);
 
-  // TODO(davidben): In OpenSSL 1.1.1, this switched from the first '@' to the
-  // last one. Match them here, or perhaps do an actual parse. Looks like
-  // multiple '@'s may be allowed in quoted strings.
-  CBS eml_local, base_local;
-  if (!CBS_get_until_first(&eml_cbs, &eml_local, '@')) {
+  CBS eml_local;
+  if (!CBS_get_until_first(&eml_cbs, &eml_local, '@') ||
+      !CBS_skip(&eml_cbs, 1)) {
     return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
   }
-  int base_has_at = CBS_get_until_first(&base_cbs, &base_local, '@');
+  CBS eml_domain = eml_cbs;
 
-  // Special case: initial '.' is RHS match
-  if (!base_has_at && starts_with(&base_cbs, '.')) {
-    if (has_suffix_case(&eml_cbs, &base_cbs)) {
+  // Exactly one '@' in eml.
+  CBS unused;
+  if (CBS_get_until_first(&eml_cbs, &unused, '@')) {
+    return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
+  }
+
+  if (!is_allowed_rfc822_local_part(&eml_local) ||
+      !is_allowed_rfc822_domain(&eml_domain)) {
+    return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
+  }
+
+  CBS base_local, base_domain;
+  bool base_has_at = CBS_get_until_first(&base_cbs, &base_local, '@');
+  if (base_has_at) {
+    CBS_skip(&base_cbs, 1);
+    base_domain = base_cbs;
+    if (CBS_get_until_first(&base_cbs, &unused, '@')) {
+      // If we did the full parsing then it is possible for a @ to be in a
+      // quoted local-part of the name, but we don't do that, so just error if @
+      // appears more than once.
+      return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
+    }
+    if (!is_allowed_rfc822_local_part(&base_local)) {
+      return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
+    }
+  } else {
+    base_domain = base_cbs;
+  }
+
+  if (!is_allowed_rfc822_domain(&base_domain)) {
+    return X509_V_ERR_UNSUPPORTED_NAME_SYNTAX;
+  }
+
+  // RFC 5280 section 4.2.1.10:
+  // To indicate a particular mailbox, the constraint is the complete mail
+  // address.  For example, "root@example.com" indicates the root mailbox on
+  // the host "example.com".
+  if (base_has_at) {
+    bool local_part_matches =
+        case_insensitive_local_part
+            ? equal_case(&base_local, &eml_local)
+            : CBS_mem_equal(&base_local, CBS_data(&eml_local),
+                            CBS_len(&eml_local));
+    bool domain_matches = equal_case(&base_domain, &eml_domain);
+    if (!local_part_matches || !domain_matches) {
+      return X509_V_ERR_PERMITTED_VIOLATION;
+    }
+    return X509_V_OK;
+  }
+
+  // RFC 5280 section 4.2.1.10:
+  // To specify any address within a domain, the constraint is specified with a
+  // leading period (as with URIs).  For example, ".example.com" indicates all
+  // the Internet mail addresses in the domain "example.com", but not Internet
+  // mail addresses on the host "example.com".
+  if (starts_with(&base_domain, '.')) {
+    if (has_suffix_case(&eml_domain, &base_domain)) {
       return X509_V_OK;
     }
     return X509_V_ERR_PERMITTED_VIOLATION;
   }
 
-  // If we have anything before '@' match local part
-  if (base_has_at) {
-    // TODO(davidben): This interprets a constraint of "@example.com" as
-    // "example.com", which is not part of RFC5280.
-    if (CBS_len(&base_local) > 0) {
-      // Case sensitive match of local part
-      if (!CBS_mem_equal(&base_local, CBS_data(&eml_local),
-                         CBS_len(&eml_local))) {
-        return X509_V_ERR_PERMITTED_VIOLATION;
-      }
-    }
-    // Position base after '@'
-    assert(starts_with(&base_cbs, '@'));
-    CBS_skip(&base_cbs, 1);
+  // RFC 5280 section 4.2.1.10:
+  // To indicate all Internet mail addresses on a particular host, the
+  // constraint is specified as the host name.  For example, the constraint
+  // "example.com" is satisfied by any mail address at the host "example.com".
+  if (equal_case(&base_domain, &eml_domain)) {
+    return X509_V_OK;
   }
-
-  // Just have hostname left to match: case insensitive
-  assert(starts_with(&eml_cbs, '@'));
-  CBS_skip(&eml_cbs, 1);
-  if (!equal_case(&base_cbs, &eml_cbs)) {
-    return X509_V_ERR_PERMITTED_VIOLATION;
-  }
-
-  return X509_V_OK;
+  return X509_V_ERR_PERMITTED_VIOLATION;
 }
 
 static int nc_uri(const ASN1_IA5STRING *uri, const ASN1_IA5STRING *base) {

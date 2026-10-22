@@ -1,11 +1,16 @@
-/*
- * Copyright 1999-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1999-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <stdio.h>
 #include <string.h>
@@ -19,8 +24,10 @@
 #include <CNIOBoringSSL_stack.h>
 #include <CNIOBoringSSL_x509.h>
 
-#include "ext_dat.h"
 #include "internal.h"
+
+
+using namespace bssl;
 
 // Certificate policies extension support: this one is a bit complex...
 
@@ -40,40 +47,36 @@ static POLICYQUALINFO *notice_section(const X509V3_CTX *ctx,
 static int nref_nos(STACK_OF(ASN1_INTEGER) *nnums,
                     const STACK_OF(CONF_VALUE) *nos);
 
-const X509V3_EXT_METHOD v3_cpols = {
+const X509V3_EXT_METHOD bssl::v3_cpols = {
     NID_certificate_policies,
     0,
     ASN1_ITEM_ref(CERTIFICATEPOLICIES),
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
     i2r_certpol,
     r2i_certpol,
-    NULL,
+    nullptr,
 };
 
-DECLARE_ASN1_ITEM(POLICYINFO)
-DECLARE_ASN1_ITEM(POLICYQUALINFO)
-DECLARE_ASN1_ITEM(USERNOTICE)
-DECLARE_ASN1_ITEM(NOTICEREF)
+ASN1_SEQUENCE(NOTICEREF) = {
+    ASN1_SIMPLE(NOTICEREF, organization, DISPLAYTEXT),
+    ASN1_SEQUENCE_OF(NOTICEREF, noticenos, ASN1_INTEGER),
+} ASN1_SEQUENCE_END(NOTICEREF)
 
-ASN1_ITEM_TEMPLATE(CERTIFICATEPOLICIES) = ASN1_EX_TEMPLATE_TYPE(
-    ASN1_TFLG_SEQUENCE_OF, 0, CERTIFICATEPOLICIES, POLICYINFO)
-ASN1_ITEM_TEMPLATE_END(CERTIFICATEPOLICIES)
+IMPLEMENT_ASN1_ALLOC_FUNCTIONS(NOTICEREF)
 
-IMPLEMENT_ASN1_FUNCTIONS_const(CERTIFICATEPOLICIES)
+ASN1_SEQUENCE(USERNOTICE) = {
+    ASN1_OPT(USERNOTICE, noticeref, NOTICEREF),
+    ASN1_OPT(USERNOTICE, exptext, DISPLAYTEXT),
+} ASN1_SEQUENCE_END(USERNOTICE)
 
-ASN1_SEQUENCE(POLICYINFO) = {
-    ASN1_SIMPLE(POLICYINFO, policyid, ASN1_OBJECT),
-    ASN1_SEQUENCE_OF_OPT(POLICYINFO, qualifiers, POLICYQUALINFO),
-} ASN1_SEQUENCE_END(POLICYINFO)
-
-IMPLEMENT_ASN1_ALLOC_FUNCTIONS(POLICYINFO)
+IMPLEMENT_ASN1_ALLOC_FUNCTIONS(USERNOTICE)
 
 ASN1_ADB_TEMPLATE(policydefault) = ASN1_SIMPLE(POLICYQUALINFO, d.other,
                                                ASN1_ANY);
@@ -92,30 +95,29 @@ ASN1_SEQUENCE(POLICYQUALINFO) = {
 
 IMPLEMENT_ASN1_ALLOC_FUNCTIONS(POLICYQUALINFO)
 
-ASN1_SEQUENCE(USERNOTICE) = {
-    ASN1_OPT(USERNOTICE, noticeref, NOTICEREF),
-    ASN1_OPT(USERNOTICE, exptext, DISPLAYTEXT),
-} ASN1_SEQUENCE_END(USERNOTICE)
+ASN1_SEQUENCE(POLICYINFO) = {
+    ASN1_SIMPLE(POLICYINFO, policyid, ASN1_OBJECT),
+    ASN1_SEQUENCE_OF_OPT(POLICYINFO, qualifiers, POLICYQUALINFO),
+} ASN1_SEQUENCE_END(POLICYINFO)
 
-IMPLEMENT_ASN1_ALLOC_FUNCTIONS(USERNOTICE)
+IMPLEMENT_ASN1_ALLOC_FUNCTIONS(POLICYINFO)
 
-ASN1_SEQUENCE(NOTICEREF) = {
-    ASN1_SIMPLE(NOTICEREF, organization, DISPLAYTEXT),
-    ASN1_SEQUENCE_OF(NOTICEREF, noticenos, ASN1_INTEGER),
-} ASN1_SEQUENCE_END(NOTICEREF)
+ASN1_ITEM_TEMPLATE(CERTIFICATEPOLICIES) = ASN1_EX_TEMPLATE_TYPE(
+    ASN1_TFLG_SEQUENCE_OF, 0, CERTIFICATEPOLICIES, POLICYINFO)
+ASN1_ITEM_TEMPLATE_END(CERTIFICATEPOLICIES)
 
-IMPLEMENT_ASN1_ALLOC_FUNCTIONS(NOTICEREF)
+IMPLEMENT_ASN1_FUNCTIONS_const(CERTIFICATEPOLICIES)
 
 static void *r2i_certpol(const X509V3_EXT_METHOD *method, const X509V3_CTX *ctx,
                          const char *value) {
   STACK_OF(POLICYINFO) *pols = sk_POLICYINFO_new_null();
-  if (pols == NULL) {
-    return NULL;
+  if (pols == nullptr) {
+    return nullptr;
   }
   STACK_OF(CONF_VALUE) *vals = X509V3_parse_list(value);
 
   {
-    if (vals == NULL) {
+    if (vals == nullptr) {
       OPENSSL_PUT_ERROR(X509V3, ERR_R_X509V3_LIB);
       goto err;
     }
@@ -146,13 +148,13 @@ static void *r2i_certpol(const X509V3_EXT_METHOD *method, const X509V3_CTX *ctx,
         }
       } else {
         ASN1_OBJECT *pobj = OBJ_txt2obj(cnf->name, 0);
-        if (pobj == NULL) {
+        if (pobj == nullptr) {
           OPENSSL_PUT_ERROR(X509V3, X509V3_R_INVALID_OBJECT_IDENTIFIER);
           X509V3_conf_err(cnf);
           goto err;
         }
         pol = POLICYINFO_new();
-        if (pol == NULL) {
+        if (pol == nullptr) {
           ASN1_OBJECT_free(pobj);
           goto err;
         }
@@ -170,7 +172,7 @@ static void *r2i_certpol(const X509V3_EXT_METHOD *method, const X509V3_CTX *ctx,
 err:
   sk_CONF_VALUE_pop_free(vals, X509V3_conf_free);
   sk_POLICYINFO_pop_free(pols, POLICYINFO_free);
-  return NULL;
+  return nullptr;
 }
 
 static POLICYINFO *policy_section(const X509V3_CTX *ctx,
@@ -203,12 +205,12 @@ static POLICYINFO *policy_section(const X509V3_CTX *ctx,
         goto err;
       }
       qual->pqualid = OBJ_nid2obj(NID_id_qt_cps);
-      if (qual->pqualid == NULL) {
+      if (qual->pqualid == nullptr) {
         OPENSSL_PUT_ERROR(X509V3, ERR_R_INTERNAL_ERROR);
         goto err;
       }
       qual->d.cpsuri = ASN1_IA5STRING_new();
-      if (qual->d.cpsuri == NULL) {
+      if (qual->d.cpsuri == nullptr) {
         goto err;
       }
       if (!ASN1_STRING_set(qual->d.cpsuri, cnf->value, strlen(cnf->value))) {
@@ -253,7 +255,7 @@ static POLICYINFO *policy_section(const X509V3_CTX *ctx,
 
 err:
   POLICYINFO_free(pol);
-  return NULL;
+  return nullptr;
 }
 
 static POLICYQUALINFO *notice_section(const X509V3_CTX *ctx,
@@ -265,7 +267,7 @@ static POLICYQUALINFO *notice_section(const X509V3_CTX *ctx,
     goto err;
   }
   qual->pqualid = OBJ_nid2obj(NID_id_qt_unotice);
-  if (qual->pqualid == NULL) {
+  if (qual->pqualid == nullptr) {
     OPENSSL_PUT_ERROR(X509V3, ERR_R_INTERNAL_ERROR);
     goto err;
   }
@@ -277,7 +279,7 @@ static POLICYQUALINFO *notice_section(const X509V3_CTX *ctx,
     const CONF_VALUE *cnf = sk_CONF_VALUE_value(unot, i);
     if (!strcmp(cnf->name, "explicitText")) {
       notice->exptext = ASN1_VISIBLESTRING_new();
-      if (notice->exptext == NULL) {
+      if (notice->exptext == nullptr) {
         goto err;
       }
       if (!ASN1_STRING_set(notice->exptext, cnf->value, strlen(cnf->value))) {
@@ -342,15 +344,15 @@ static POLICYQUALINFO *notice_section(const X509V3_CTX *ctx,
 
 err:
   POLICYQUALINFO_free(qual);
-  return NULL;
+  return nullptr;
 }
 
 static int nref_nos(STACK_OF(ASN1_INTEGER) *nnums,
                     const STACK_OF(CONF_VALUE) *nos) {
   for (size_t i = 0; i < sk_CONF_VALUE_num(nos); i++) {
     const CONF_VALUE *cnf = sk_CONF_VALUE_value(nos, i);
-    ASN1_INTEGER *aint = s2i_ASN1_INTEGER(NULL, cnf->name);
-    if (aint == NULL) {
+    ASN1_INTEGER *aint = s2i_ASN1_INTEGER(nullptr, cnf->name);
+    if (aint == nullptr) {
       OPENSSL_PUT_ERROR(X509V3, X509V3_R_INVALID_NUMBER);
       return 0;
     }
@@ -419,11 +421,11 @@ static void print_notice(BIO *out, const USERNOTICE *notice, int indent) {
       if (i) {
         BIO_puts(out, ", ");
       }
-      if (num == NULL) {
+      if (num == nullptr) {
         BIO_puts(out, "(null)");
       } else {
-        tmp = i2s_ASN1_INTEGER(NULL, num);
-        if (tmp == NULL) {
+        tmp = i2s_ASN1_INTEGER(nullptr, num);
+        if (tmp == nullptr) {
           return;
         }
         BIO_puts(out, tmp);

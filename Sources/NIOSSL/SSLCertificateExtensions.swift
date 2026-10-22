@@ -29,7 +29,7 @@ extension NIOSSLCertificate {
 
                 deinit {
                     if let reference = self.reference {
-                        CNIOBoringSSL_sk_X509_EXTENSION_free(reference)
+                        CNIOBoringSSLShims_sk_X509_EXTENSION_free(reference)
                     }
                 }
             }
@@ -80,7 +80,7 @@ extension NIOSSLCertificate {
         internal init(takeOwnershipOf reference: OpaquePointer?) {
             self.storage = .init(takeOwnershipOf: reference)
             if let reference = reference {
-                self.stackSize = CNIOBoringSSL_sk_X509_EXTENSION_num(reference)
+                self.stackSize = CNIOBoringSSLShims_sk_X509_EXTENSION_num(reference)
             } else {
                 self.stackSize = 0
             }
@@ -89,7 +89,7 @@ extension NIOSSLCertificate {
         internal init(borrowing reference: OpaquePointer?, owner: AnyObject) {
             self.storage = .init(borrowing: reference, owner: owner)
             if let reference = reference {
-                self.stackSize = CNIOBoringSSL_sk_X509_EXTENSION_num(reference)
+                self.stackSize = CNIOBoringSSLShims_sk_X509_EXTENSION_num(reference)
             } else {
                 self.stackSize = 0
             }

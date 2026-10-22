@@ -1,16 +1,16 @@
-/* Copyright 2020 The BoringSSL Authors
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2020 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_ctrdrbg.h>
 
@@ -21,6 +21,8 @@
 #if defined(BORINGSSL_FIPS)
 
 #include <atomic>
+
+using namespace bssl;
 
 // passive_get_seed_entropy writes |out_entropy_len| bytes of entropy, suitable
 // for seeding a DRBG, to |out_entropy|. It sets |*out_used_cpu| to one if the
@@ -33,12 +35,12 @@ static void passive_get_seed_entropy(uint8_t *out_entropy,
   if (bcm_success(BCM_rand_bytes_hwrng(out_entropy, out_entropy_len))) {
     *out_want_additional_input = 1;
   } else {
-    CRYPTO_sysrand_for_seed(out_entropy, out_entropy_len);
+    CRYPTO_sysrand(out_entropy, out_entropy_len);
   }
 }
 
 #define ENTROPY_READ_LEN \
-  (/* last_block size */ 16 + CTR_DRBG_ENTROPY_LEN * BORINGSSL_FIPS_OVERREAD)
+  (/* last_block size */ 16 + CTR_DRBG_SEED_LEN * BORINGSSL_FIPS_OVERREAD)
 
 #if defined(OPENSSL_ANDROID)
 
@@ -152,7 +154,7 @@ static int get_seed_from_daemon(uint8_t *out_entropy, size_t out_entropy_len) {
 
 // RAND_need_entropy is called by the FIPS module when it has blocked because of
 // a lack of entropy. This signal is used as an indication to feed it more.
-void RAND_need_entropy(size_t bytes_needed) {
+void bssl::RAND_need_entropy(size_t bytes_needed) {
   uint8_t buf[ENTROPY_READ_LEN];
   size_t todo = sizeof(buf);
   if (todo > bytes_needed) {

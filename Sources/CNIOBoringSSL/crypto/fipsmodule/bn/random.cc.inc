@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_bn.h>
 
@@ -21,8 +26,10 @@
 #include "internal.h"
 
 
+using namespace bssl;
+
 int BN_rand(BIGNUM *rnd, int bits, int top, int bottom) {
-  if (rnd == NULL) {
+  if (rnd == nullptr) {
     return 0;
   }
 
@@ -111,8 +118,8 @@ static crypto_word_t bn_less_than_word_mask(const BN_ULONG *a, size_t len,
   return mask;
 }
 
-int bn_in_range_words(const BN_ULONG *a, BN_ULONG min_inclusive,
-                      const BN_ULONG *max_exclusive, size_t len) {
+int bssl::bn_in_range_words(const BN_ULONG *a, BN_ULONG min_inclusive,
+                            const BN_ULONG *max_exclusive, size_t len) {
   crypto_word_t mask = ~bn_less_than_word_mask(a, len, min_inclusive);
   return mask & bn_less_than_words(a, max_exclusive, len);
 }
@@ -145,12 +152,12 @@ static int bn_range_to_mask(size_t *out_words, BN_ULONG *out_mask,
   return 1;
 }
 
-int bn_rand_range_words(BN_ULONG *out, BN_ULONG min_inclusive,
-                        const BN_ULONG *max_exclusive, size_t len,
-                        const uint8_t additional_data[32]) {
-  // This function implements the equivalent of steps 4 through 7 of FIPS 186-4
-  // appendices B.4.2 and B.5.2. When called in those contexts, |max_exclusive|
-  // is n and |min_inclusive| is one.
+int bssl::bn_rand_range_words(BN_ULONG *out, BN_ULONG min_inclusive,
+                              const BN_ULONG *max_exclusive, size_t len,
+                              const uint8_t additional_data[32]) {
+  // This function implements the equivalent of steps 1 through 4 of FIPS 186-5
+  // appendices A.2.2 and A.3.2, repeating the process on failure. When called
+  // in those contexts, |max_exclusive| is n and |min_inclusive| is one.
 
   // Compute the bit length of |max_exclusive| (step 1), in terms of a number of
   // |words| worth of entropy to fill and a mask of bits to clear in the top
@@ -171,21 +178,19 @@ int bn_rand_range_words(BN_ULONG *out, BN_ULONG min_inclusive,
       return 0;
     }
 
-    // Steps 4 and 5. Use |words| and |mask| together to obtain a string of N
-    // bits, where N is the bit length of |max_exclusive|.
+    // Use |words| and |mask| together to obtain a string of N bits, where N is
+    // the bit length of |max_exclusive|.
     FIPS_service_indicator_lock_state();
     BCM_rand_bytes_with_additional_data(
         (uint8_t *)out, words * sizeof(BN_ULONG), additional_data);
     FIPS_service_indicator_unlock_state();
     out[words - 1] &= mask;
 
-    // If out >= max_exclusive or out < min_inclusive, retry. This implements
-    // the equivalent of steps 6 and 7 without leaking the value of |out|. The
-    // result of this comparison may be treated as public. It only reveals how
-    // many attempts were needed before we found a value in range. This is
-    // independent of the final secret output, and has a distribution that
-    // depends only on |min_inclusive| and |max_exclusive|, both of which are
-    // public.
+    // If out >= max_exclusive or out < min_inclusive, retry. The result of this
+    // comparison may be treated as public. It only reveals how many attempts
+    // were needed before we found a value in range. This is independent of the
+    // final secret output, and has a distribution that depends only on
+    // |min_inclusive| and |max_exclusive|, both of which are public.
   } while (!constant_time_declassify_int(
       bn_in_range_words(out, min_inclusive, max_exclusive, words)));
   return 1;
@@ -205,8 +210,9 @@ int BN_rand_range_ex(BIGNUM *r, BN_ULONG min_inclusive,
   return 1;
 }
 
-int bn_rand_secret_range(BIGNUM *r, int *out_is_uniform, BN_ULONG min_inclusive,
-                         const BIGNUM *max_exclusive) {
+int bssl::bn_rand_secret_range(BIGNUM *r, int *out_is_uniform,
+                               BN_ULONG min_inclusive,
+                               const BIGNUM *max_exclusive) {
   size_t words;
   BN_ULONG mask;
   if (!bn_range_to_mask(&words, &mask, min_inclusive, max_exclusive->d,

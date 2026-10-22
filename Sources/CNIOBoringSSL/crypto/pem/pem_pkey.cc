@@ -1,11 +1,16 @@
-/*
- * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
- *
- * Licensed under the OpenSSL license (the "License").  You may not use
- * this file except in compliance with the License.  You can obtain a copy
- * in the file LICENSE in the source distribution or at
- * https://www.openssl.org/source/license.html
- */
+// Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <CNIOBoringSSL_pem.h>
 
@@ -23,20 +28,20 @@
 
 EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb,
                                   void *u) {
-  char *nm = NULL;
-  const unsigned char *p = NULL;
-  unsigned char *data = NULL;
+  char *nm = nullptr;
+  const unsigned char *p = nullptr;
+  unsigned char *data = nullptr;
   long len;
-  EVP_PKEY *ret = NULL;
+  EVP_PKEY *ret = nullptr;
 
   if (!PEM_bytes_read_bio(&data, &len, &nm, PEM_STRING_EVP_PKEY, bp, cb, u)) {
-    return NULL;
+    return nullptr;
   }
   p = data;
 
   if (strcmp(nm, PEM_STRING_PKCS8INF) == 0) {
     PKCS8_PRIV_KEY_INFO *p8inf;
-    p8inf = d2i_PKCS8_PRIV_KEY_INFO(NULL, &p, len);
+    p8inf = d2i_PKCS8_PRIV_KEY_INFO(nullptr, &p, len);
     if (!p8inf) {
       goto p8err;
     }
@@ -53,7 +58,7 @@ EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb,
     X509_SIG *p8;
     int pass_len;
     char psbuf[PEM_BUFSIZE];
-    p8 = d2i_X509_SIG(NULL, &p, len);
+    p8 = d2i_X509_SIG(nullptr, &p, len);
     if (!p8) {
       goto p8err;
     }
@@ -93,7 +98,7 @@ EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bp, EVP_PKEY **x, pem_password_cb *cb,
     ret = d2i_PrivateKey(EVP_PKEY_DSA, x, &p, len);
   }
 p8err:
-  if (ret == NULL) {
+  if (ret == nullptr) {
     OPENSSL_PUT_ERROR(PEM, ERR_R_ASN1_LIB);
   }
 
@@ -113,9 +118,9 @@ int PEM_write_bio_PrivateKey(BIO *bp, EVP_PKEY *x, const EVP_CIPHER *enc,
 EVP_PKEY *PEM_read_PrivateKey(FILE *fp, EVP_PKEY **x, pem_password_cb *cb,
                               void *u) {
   BIO *b = BIO_new_fp(fp, BIO_NOCLOSE);
-  if (b == NULL) {
+  if (b == nullptr) {
     OPENSSL_PUT_ERROR(PEM, ERR_R_BUF_LIB);
-    return NULL;
+    return nullptr;
   }
   EVP_PKEY *ret = PEM_read_bio_PrivateKey(b, x, cb, u);
   BIO_free(b);
@@ -126,7 +131,7 @@ int PEM_write_PrivateKey(FILE *fp, EVP_PKEY *x, const EVP_CIPHER *enc,
                          const unsigned char *pass, int pass_len,
                          pem_password_cb *cb, void *u) {
   BIO *b = BIO_new_fp(fp, BIO_NOCLOSE);
-  if (b == NULL) {
+  if (b == nullptr) {
     OPENSSL_PUT_ERROR(PEM, ERR_R_BUF_LIB);
     return 0;
   }
