@@ -1541,7 +1541,7 @@ class TLSConfigurationTest: XCTestCase {
         // so that we're testing these best effort functions.
         XCTAssertEqual(
             MemoryLayout<TLSConfiguration>.size,
-            234,
+            235,
             "TLSConfiguration has changed size: you probably need to update this test!"
         )
 
@@ -1598,6 +1598,7 @@ class TLSConfigurationTest: XCTestCase {
             { $0.keyLogCallback = { _ in } },
             { $0.renegotiationSupport = .always },
             { $0.sendCANameList = true },
+            { $0.trustRootsAreTrustAnchors = true },
             { $0.pskClientCallback = pskClientCallback },
             { $0.pskServerCallback = pskServerCallback },
             { $0.sslContextCallback = sslContextCallback },
