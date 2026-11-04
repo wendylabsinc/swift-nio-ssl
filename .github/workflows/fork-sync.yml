@@ -1,0 +1,209 @@
+# Fork sync: merge upstream main into our long-lived branch, test it, push it,
+# and open bump PRs in the consumers that pin this fork by revision.
+#
+# This file lives ONLY on the fork's `main` (scheduled workflows run from the
+# default branch). It must never be committed to SYNC_BRANCH: that branch is
+# Apple main plus our patches and is the head of an open PR.
+name: Fork sync
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Merge and test only; do not push, do not open bump PRs"
+        type: boolean
+        default: false
+
+env:
+  UPSTREAM_REPO: apple/swift-nio-ssl
+  SYNC_BRANCH: mldsa-on-upstream
+  # Toolchain: Apple's unit_tests matrix includes swift:6.3-noble and every
+  # consumer below builds with swift:6.3-noble.
+  SWIFT_IMAGE: swift:6.3-noble
+  SWIFT_TEST_ARGS: ""
+  # One consumer per line: "<owner/repo> <path to Package.swift pinning this fork>"
+  CONSUMERS: |
+    wendylabsinc/wendy-auth Package.swift
+    wendylabsinc/cloud Package.swift
+    wendylabsinc/wendyos swift/WendyAgentCore/Package.swift
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      pushed: ${{ steps.push.outputs.pushed }}
+      old_sha: ${{ steps.merge.outputs.old_sha }}
+      new_sha: ${{ steps.push.outputs.new_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SYNC_BRANCH }}
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main
+          echo "old_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "::notice::${SYNC_BRANCH} already contains upstream/main; nothing to do"
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          if git merge --no-ff -m "Merge ${UPSTREAM_REPO} main into ${SYNC_BRANCH} (fork sync)" upstream/main; then
+            git log --oneline -1
+            exit 0
+          fi
+          conflicts=$(git diff --name-only --diff-filter=U)
+          git merge --abort
+          echo "fork sync: conflict merging upstream main into ${SYNC_BRANCH}" > "$RUNNER_TEMP/issue-title"
+          {
+            echo "Merging \`${UPSTREAM_REPO}\` main ($(git rev-parse --short upstream/main)) into \`${SYNC_BRANCH}\` ($(git rev-parse --short HEAD)) conflicts in:"
+            echo
+            # shellcheck disable=SC2016 # literal backticks for markdown
+            echo "$conflicts" | sed 's/^/- `/; s/$/`/'
+            echo
+            echo "Resolve by hand on \`${SYNC_BRANCH}\`; the next run picks up from there. Run: ${RUN_URL}"
+          } > "$RUNNER_TEMP/issue-body"
+          echo "::error::merge conflict in: $(echo "$conflicts" | tr '\n' ' ')"
+          exit 1
+
+      - name: Build and test
+        if: steps.merge.outputs.up_to_date == 'false'
+        shell: bash
+        env:
+          OLD_SHA: ${{ steps.merge.outputs.old_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2086 # SWIFT_TEST_ARGS is intentionally word-split
+          if docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src "$SWIFT_IMAGE" swift test $SWIFT_TEST_ARGS; then
+            exit 0
+          fi
+          echo "fork sync: tests failed after merging upstream main" > "$RUNNER_TEMP/issue-title"
+          {
+            echo "\`swift test ${SWIFT_TEST_ARGS}\` failed in \`${SWIFT_IMAGE}\` after merging \`${UPSTREAM_REPO}\` main ($(git rev-parse --short upstream/main)) into \`${SYNC_BRANCH}\` ($(git rev-parse --short "$OLD_SHA"))."
+            echo
+            echo "Nothing was pushed. Run: ${RUN_URL}"
+          } > "$RUNNER_TEMP/issue-body"
+          exit 1
+
+      - name: Push merge commit
+        id: push
+        if: steps.merge.outputs.up_to_date == 'false' && inputs.dry_run != true
+        shell: bash
+        run: |
+          git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          echo "new_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update issue
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [ -f "$RUNNER_TEMP/issue-title" ] || { echo "no issue to file (infrastructure failure)"; exit 0; }
+          title=$(cat "$RUNNER_TEMP/issue-title")
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/issue-body"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue-body"
+          fi
+
+  bump:
+    needs: sync
+    if: needs.sync.outputs.pushed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+      OLD_SHA: ${{ needs.sync.outputs.old_sha }}
+      NEW_SHA: ${{ needs.sync.outputs.new_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SYNC_BRANCH }}
+          fetch-depth: 0
+
+      - name: Open bump PRs in consumers
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::secret FORK_SYNC_TOKEN is not set; skipping consumer bump PRs for ${NEW_SHA}"
+            exit 0
+          fi
+          package=${UPSTREAM_REPO#*/}
+          short=$(git rev-parse --short "$NEW_SHA")
+          branch="fork-sync/${package}-${short}"
+          title="chore(deps): ${package} fork sync to ${short}"
+          {
+            echo "Bumps the \`${package}\` fork pin from \`${OLD_SHA}\` to \`${NEW_SHA}\` (branch \`${SYNC_BRANCH}\` of \`${GITHUB_REPOSITORY}\`)."
+            echo
+            echo "Upstream \`${UPSTREAM_REPO}\` commits merged:"
+            echo
+            git log --no-merges --format='- %h %s' "${OLD_SHA}..${NEW_SHA}"
+            echo
+            echo "Opened by the fork-sync workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh auth setup-git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          failed=""
+          while read -r repo pin; do
+            [ -n "$repo" ] || continue
+            echo "::group::${repo}"
+            if [ "$(gh pr list -R "$repo" --head "$branch" --state all --json number --jq length)" != "0" ]; then
+              echo "PR for ${branch} already exists; skipping"
+              echo "::endgroup::"
+              continue
+            fi
+            dir="$RUNNER_TEMP/${repo#*/}"
+            set +e
+            (
+              set -e
+              git clone --depth 1 "https://github.com/${repo}.git" "$dir"
+              cd "$dir"
+              base=$(git rev-parse --abbrev-ref HEAD)
+              count=$(grep -c "$OLD_SHA" "$pin" || true)
+              if [ "$count" != "1" ]; then
+                # ponytail: exact-SHA replace; if a previous bump PR is still unmerged this
+                # fails for that consumer and someone catches it up by hand.
+                echo "::error::${repo}: expected ${OLD_SHA} exactly once in ${pin}, found ${count}"
+                exit 1
+              fi
+              git checkout -b "$branch"
+              sed -i "s/${OLD_SHA}/${NEW_SHA}/" "$pin"
+              git commit -am "$title"
+              git push origin "$branch"
+              gh pr create -R "$repo" --base "$base" --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+            )
+            rc=$?
+            set -e
+            [ "$rc" -eq 0 ] || failed="${failed} ${repo}"
+            echo "::endgroup::"
+          done <<< "$CONSUMERS"
+          if [ -n "$failed" ]; then
+            echo "::error::bump failed for:${failed}"
+            exit 1
+          fi
